@@ -44,7 +44,7 @@ type BrowserScreenInfo = {
   isCurrent: boolean
 }
 
-type RequestBody = BodyInit | Record<string, unknown> | null | undefined
+type RequestBody = BodyInit | object | null | undefined
 
 type WailsRuntime = {
   EventsOn?: (event: string, callback: (payload: unknown) => void) => void
