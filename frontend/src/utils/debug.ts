@@ -1,4 +1,4 @@
-import { LogDebug, LogError } from '../../wailsjs/runtime/runtime'
+import { logDebug, logError } from '@/lib/bridge'
 
 export interface DebugEntry {
   timestamp: string
@@ -50,9 +50,9 @@ function push(level: DebugEntry['level'], source: string, message: string, detai
   const line = `[${entry.timestamp}] [${source}] ${message}${entry.detail ? ` :: ${entry.detail}` : ''}`
   try {
     if (level === 'error') {
-      LogError(line)
+      logError(line)
     } else {
-      LogDebug(line)
+      logDebug(line)
     }
   } catch {
     console[level === 'error' ? 'error' : 'debug'](line)

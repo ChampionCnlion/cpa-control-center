@@ -4,16 +4,11 @@ import { ElConfigProvider, ElMessage, ElOption, ElSelect } from 'element-plus'
 import type { Language } from 'element-plus/es/locale'
 import en from 'element-plus/es/locale/lang/en'
 import zhCn from 'element-plus/es/locale/lang/zh-cn'
-import {
-  ClipboardSetText,
-  ScreenGetAll,
-  WindowSetLightTheme,
-  WindowSetMinSize,
-} from '../wailsjs/runtime/runtime'
 import { useAccountsStore } from '@/stores/accounts'
 import { useQuotasStore } from '@/stores/quotas'
 import { useSettingsStore } from '@/stores/settings'
 import { useTasksStore } from '@/stores/tasks'
+import { clipboardSetText, screenGetAll, windowSetLightTheme, windowSetMinSize } from '@/lib/bridge'
 import type { ViewKey } from '@/types'
 import { useI18n } from 'vue-i18n'
 import { formatDateTime } from '@/utils/format'
@@ -299,7 +294,7 @@ async function copyDebugDump() {
       return `[${entry.timestamp}] [${entry.level}] [${entry.source}] ${entry.message}${detail}`
     }),
   ].join('\n')
-  await ClipboardSetText(dump)
+  await clipboardSetText(dump)
   ElMessage.success('Debug info copied')
 }
 
@@ -314,7 +309,7 @@ async function changeLocale(locale: string) {
 
 async function calibrateWindowToScreen() {
   try {
-    const screens = await ScreenGetAll()
+    const screens = await screenGetAll()
     const screen = screens.find((item) => item.isCurrent) ?? screens.find((item) => item.isPrimary) ?? screens[0]
     if (!screen) {
       return
@@ -331,7 +326,7 @@ async function calibrateWindowToScreen() {
     const minWidth = Math.min(safeMinWidth, availableWidth)
     const minHeight = Math.min(safeMinHeight, availableHeight)
 
-    WindowSetMinSize(minWidth, minHeight)
+    await windowSetMinSize(minWidth, minHeight)
   } catch (error) {
     emitDebugError('app', 'window calibration failed', error)
   }
@@ -345,7 +340,7 @@ onMounted(async () => {
   bindViewportObserver()
   emitDebug('app', 'startup begin')
   try {
-    WindowSetLightTheme()
+    await windowSetLightTheme()
     await calibrateWindowToScreen()
     updateViewportMetrics()
     await settingsStore.loadSettings()

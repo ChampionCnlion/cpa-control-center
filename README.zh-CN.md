@@ -8,6 +8,10 @@
 
 你只需要填写 `Base URL` 和 `Management Token`，就可以在一个原生窗口里完成库存同步、扫描、维护、定时任务、日志、历史记录和导出。
 
+> 补充说明：
+> 这个 fork 额外增加了一个可选的 **Web / Docker 部署模式**。
+> 通过 `Dockerfile.web`、`web_main.go` 和 `.github/workflows/web-image.yml`，可以在 GitHub Actions 上构建 Linux Web 镜像，再由服务器直接 `docker pull` 运行。
+
 ## 致谢与目标后端
 
 - 本项目明确借鉴并参考了 [`fantasticjoe/cpa-warden`](https://github.com/fantasticjoe/cpa-warden) 的工作流设计。

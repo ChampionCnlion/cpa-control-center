@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { GetCodexQuotaSnapshot } from '../../wailsjs/go/main/App'
+import { getCodexQuotaSnapshot } from '@/lib/bridge'
 import type { CodexQuotaSnapshot, QuotaRecoveryMode, QuotaResultFilter, QuotaSortMode, QuotaViewMode } from '@/types'
 import { toErrorMessage } from '@/utils/errors'
 
@@ -61,7 +61,7 @@ export const useQuotasStore = defineStore('quotasStore', {
       this.error = ''
       this.hasRequested = true
       try {
-        const snapshot = await GetCodexQuotaSnapshot() as unknown as CodexQuotaSnapshot
+        const snapshot = await getCodexQuotaSnapshot() as CodexQuotaSnapshot
         this.applySnapshot(snapshot)
         return snapshot
       } catch (error) {

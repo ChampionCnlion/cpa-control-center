@@ -152,6 +152,9 @@ function openDetailDialog(row: AccountRecord) {
 async function exportKind(kind: 'invalid401' | 'quotaLimited', format: 'json' | 'csv') {
   try {
     const result = await accountsStore.exportRecords(kind, format)
+    if (result.downloadUrl) {
+      window.open(result.downloadUrl, '_blank', 'noopener,noreferrer')
+    }
     ElMessage.success(t('accounts.messages.exported', { count: result.exported, path: result.path }))
   } catch (error) {
     ElMessage.error(toErrorMessage(error))

@@ -8,6 +8,10 @@ Desktop operations tool for CPA-managed Codex auth pools.
 
 You connect it to a CPA instance with a `Base URL` and a `Management Token`, then handle inventory sync, scanning, maintenance, scheduler runs, logs, history, and exports from one native window.
 
+> Note:
+> this fork also adds an optional **Web / Docker deployment mode**.
+> With `Dockerfile.web`, `web_main.go`, and `.github/workflows/web-image.yml`, GitHub Actions can build a Linux web image that your server can pull directly.
+
 ## Acknowledgement and Intended Backend
 
 - This project is explicitly inspired by and borrows workflow ideas from [`fantasticjoe/cpa-warden`](https://github.com/fantasticjoe/cpa-warden).

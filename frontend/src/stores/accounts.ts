@@ -1,17 +1,17 @@
 import { defineStore } from 'pinia'
 import {
-  DeleteAccount,
-  DeleteAccounts,
-  ExportAccounts,
-  GetDashboardSnapshot,
-  GetScanDetailsPage,
-  ListAccountsPage,
-  ProbeAccount,
-  ProbeAccounts,
-  SetAccountDisabled,
-  SetAccountsDisabled,
-  SyncInventory,
-} from '../../wailsjs/go/main/App'
+  deleteAccount,
+  deleteAccounts,
+  exportAccounts,
+  getDashboardSnapshot,
+  getScanDetailsPage,
+  listAccountsPage,
+  probeAccount,
+  probeAccounts,
+  setAccountDisabled,
+  setAccountsDisabled,
+  syncInventory,
+} from '@/lib/bridge'
 import type {
   AccountFilter,
   AccountPage,
@@ -107,7 +107,7 @@ export const useAccountsStore = defineStore('accountsStore', {
   },
   actions: {
     async refreshDashboard() {
-      const snapshot = await GetDashboardSnapshot() as DashboardSnapshot
+      const snapshot = await getDashboardSnapshot() as DashboardSnapshot
       this.summary = snapshot.summary
       this.history = Array.isArray(snapshot.history) ? snapshot.history : []
       return snapshot
@@ -126,14 +126,14 @@ export const useAccountsStore = defineStore('accountsStore', {
 
       this.pageLoading = true
       try {
-        const page = await ListAccountsPage(
+        const page = await listAccountsPage(
           {
             ...this.currentFilter,
             type: settingsStore.settings.targetType || '',
           },
           this.page,
           this.pageSize,
-        ) as unknown as AccountPage
+        ) as AccountPage
         this.records = Array.isArray(page.records) ? page.records : []
         this.totalRecords = page.totalRecords
         this.page = page.page
@@ -155,10 +155,10 @@ export const useAccountsStore = defineStore('accountsStore', {
       }
     },
     async syncInventory() {
-      return await SyncInventory() as InventorySyncResult
+      return await syncInventory() as InventorySyncResult
     },
     async loadScanDetail(runId: number, page = 1, pageSize = 20) {
-      const detail = await GetScanDetailsPage(runId, page, pageSize) as ScanDetailPage
+      const detail = await getScanDetailsPage(runId, page, pageSize) as ScanDetailPage
       this.scanDetail = {
         ...detail,
         records: Array.isArray(detail.records) ? detail.records : [],
@@ -167,7 +167,7 @@ export const useAccountsStore = defineStore('accountsStore', {
     },
     async probeAccount(name: string) {
       try {
-        const record = await ProbeAccount(name)
+        const record = await probeAccount(name)
         this.records = updateCurrentPageRecord(this.records, record)
         await this.refreshDashboard()
         await this.loadAccountsPage()
@@ -178,42 +178,42 @@ export const useAccountsStore = defineStore('accountsStore', {
     },
     async probeAccounts(names: string[]) {
       try {
-        return await ProbeAccounts(names) as BulkAccountActionResult
+        return await probeAccounts(names) as BulkAccountActionResult
       } catch (error) {
         throw new Error(toErrorMessage(error))
       }
     },
     async setAccountDisabled(name: string, disabled: boolean) {
       try {
-        return await SetAccountDisabled(name, disabled)
+        return await setAccountDisabled(name, disabled)
       } catch (error) {
         throw new Error(toErrorMessage(error))
       }
     },
     async setAccountsDisabled(names: string[], disabled: boolean) {
       try {
-        return await SetAccountsDisabled(names, disabled) as BulkAccountActionResult
+        return await setAccountsDisabled(names, disabled) as BulkAccountActionResult
       } catch (error) {
         throw new Error(toErrorMessage(error))
       }
     },
     async deleteAccount(name: string) {
       try {
-        return await DeleteAccount(name)
+        return await deleteAccount(name)
       } catch (error) {
         throw new Error(toErrorMessage(error))
       }
     },
     async deleteAccounts(names: string[]) {
       try {
-        return await DeleteAccounts(names) as BulkAccountActionResult
+        return await deleteAccounts(names) as BulkAccountActionResult
       } catch (error) {
         throw new Error(toErrorMessage(error))
       }
     },
     async exportRecords(kind: 'invalid401' | 'quotaLimited', format: 'json' | 'csv') {
       try {
-        return await ExportAccounts(kind, format, '') as ExportResult
+        return await exportAccounts(kind, format, '') as ExportResult
       } catch (error) {
         throw new Error(toErrorMessage(error))
       }

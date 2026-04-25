@@ -234,6 +234,7 @@ export interface ExportResult {
   format: string
   path: string
   exported: number
+  downloadUrl?: string
 }
 
 export interface ScanSummary {
