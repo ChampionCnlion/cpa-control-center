@@ -165,6 +165,8 @@ func (c *Client) ProbeUsageResult(ctx context.Context, settings AppSettings, rec
 	if attempts < 1 {
 		attempts = 1
 	}
+	maxRetries := attempts - 1
+	confirmInventoryUsageLimit := shouldConfirmInventoryUsageLimit(record)
 
 	var onRetry ProbeRetryObserver
 	if len(retryObservers) > 0 {
@@ -172,27 +174,36 @@ func (c *Client) ProbeUsageResult(ctx context.Context, settings AppSettings, rec
 	}
 
 	var probed UsageProbeResult
-	for attempt := 1; attempt <= attempts; attempt++ {
+	probeCount := 0
+	retryCount := 0
+	for {
+		probeCount++
 		probed = c.probeUsageOnce(ctx, settings, record)
-		if !shouldRetryProbeResult(probed.Record) || attempt == attempts || ctx.Err() != nil {
+		if confirmInventoryUsageLimit && shouldReprobeAfterInventoryUsageLimit(record, probed.Record) && ctx.Err() == nil {
+			confirmInventoryUsageLimit = false
+			if err := waitForRetry(ctx, c.retryDelay*time.Duration(probeCount)); err != nil {
+				return probed
+			}
+			continue
+		}
+		if !shouldRetryProbeResult(probed.Record) || retryCount >= maxRetries || ctx.Err() != nil {
 			return probed
 		}
+		retryCount++
 		if onRetry != nil {
 			onRetry(ProbeRetryEvent{
 				AccountName:    record.Name,
-				RetryIndex:     attempt,
-				MaxRetries:     attempts - 1,
+				RetryIndex:     retryCount,
+				MaxRetries:     maxRetries,
 				ProbeErrorKind: probed.Record.ProbeErrorKind,
 				ProbeErrorText: probed.Record.ProbeErrorText,
 				StatusCode:     intValue(probed.Record.APIStatusCode),
 			})
 		}
-		if err := waitForRetry(ctx, c.retryDelay*time.Duration(attempt)); err != nil {
+		if err := waitForRetry(ctx, c.retryDelay*time.Duration(probeCount)); err != nil {
 			return probed
 		}
 	}
-
-	return probed
 }
 
 func (c *Client) FetchWhamUsage(ctx context.Context, settings AppSettings, record AccountRecord) (map[string]any, error) {
@@ -320,6 +331,14 @@ func shouldRetryProbeResult(record AccountRecord) bool {
 	default:
 		return false
 	}
+}
+
+func shouldConfirmInventoryUsageLimit(record AccountRecord) bool {
+	return len(findUsageLimitErrorPayload(record.StatusMessage)) > 0
+}
+
+func shouldReprobeAfterInventoryUsageLimit(original AccountRecord, probed AccountRecord) bool {
+	return shouldConfirmInventoryUsageLimit(original) && normalizeStateKey(probed.StateKey) == stateNormal
 }
 
 func (c *Client) DeleteAccount(ctx context.Context, settings AppSettings, name string) ActionResult {

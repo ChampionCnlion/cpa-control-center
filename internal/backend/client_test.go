@@ -538,6 +538,114 @@ func TestClientProbeTreatsUsageLimit401AsQuotaLimitedWhenInventoryMarkedUnavaila
 	}
 }
 
+func TestClientProbeRechecksInventoryUsageLimitBeforeAcceptingNormal(t *testing.T) {
+	t.Parallel()
+
+	var hits int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v0/management/api-call":
+			if atomic.AddInt32(&hits, 1) == 1 {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"status_code": 200,
+					"body":        `{"plan_type":"free","rate_limit":{"allowed":true,"limit_reached":false}}`,
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status_code": 401,
+				"body": `{
+					"error": {
+						"type": "usage_limit_reached",
+						"message": "The usage limit has been reached",
+						"plan_type": "free",
+						"resets_at": 1775549913,
+						"resets_in_seconds": 602639
+					}
+				}`,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient()
+	client.retryDelay = 0
+	settings := AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TimeoutSeconds:  5,
+		Retries:         0,
+		UserAgent:       defaultUserAgent,
+	}
+
+	record := AccountRecord{
+		Name:             "inventory-usage-limit.json",
+		AuthIndex:        "inventory-usage-limit",
+		Type:             "codex",
+		Provider:         "codex",
+		ChatGPTAccountID: "acct-inventory-usage-limit",
+		StatusMessage:    `{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"free"}}`,
+	}
+
+	probed := client.ProbeUsage(context.Background(), settings, record)
+	if probed.StateKey != stateQuotaLimited {
+		t.Fatalf("expected quota_limited after inventory-confirmation reprobe, got %+v", probed)
+	}
+	if atomic.LoadInt32(&hits) != 2 {
+		t.Fatalf("expected 2 probe attempts, got %d", hits)
+	}
+}
+
+func TestClientProbeAcceptsNormalAfterInventoryUsageLimitConfirmation(t *testing.T) {
+	t.Parallel()
+
+	var hits int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v0/management/api-call":
+			atomic.AddInt32(&hits, 1)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status_code": 200,
+				"body":        `{"plan_type":"free","rate_limit":{"allowed":true,"limit_reached":false}}`,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient()
+	client.retryDelay = 0
+	settings := AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TimeoutSeconds:  5,
+		Retries:         0,
+		UserAgent:       defaultUserAgent,
+	}
+
+	record := AccountRecord{
+		Name:             "inventory-usage-limit-normal.json",
+		AuthIndex:        "inventory-usage-limit-normal",
+		Type:             "codex",
+		Provider:         "codex",
+		ChatGPTAccountID: "acct-inventory-usage-limit-normal",
+		StatusMessage:    `{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"free"}}`,
+	}
+
+	probed := client.ProbeUsage(context.Background(), settings, record)
+	if probed.StateKey != stateNormal {
+		t.Fatalf("expected normal after confirmation reprobe, got %+v", probed)
+	}
+	if atomic.LoadInt32(&hits) != 2 {
+		t.Fatalf("expected 2 probe attempts, got %d", hits)
+	}
+}
+
 func TestClientProbeTreatsDoubleEncodedUsageLimit401AsQuotaLimited(t *testing.T) {
 	t.Parallel()
 
