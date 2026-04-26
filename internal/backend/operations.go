@@ -690,12 +690,21 @@ func (b *Backend) runMaintain(ctx context.Context, settings AppSettings) (Mainta
 	}
 
 	if settings.AutoReenable && len(recovered) > 0 {
+		reconfirmed, err := b.reconfirmRecoveredAccounts(ctx, "maintain", settings, recovered)
+		if err != nil {
+			return result, err
+		}
+
 		var toEnable []string
-		for _, record := range recovered {
-			if slices.Contains(deletedNames, record.Name) {
+		for _, probe := range reconfirmed {
+			recordMap[probe.Record.Name] = probe.Record
+			if slices.Contains(deletedNames, probe.Record.Name) {
 				continue
 			}
-			toEnable = append(toEnable, record.Name)
+			if normalizeStateKey(probe.Record.StateKey) != stateRecovered {
+				continue
+			}
+			toEnable = append(toEnable, probe.Record.Name)
 		}
 		if len(toEnable) > 0 {
 			b.emitLog("maintain", "info", msg(settings.Locale, "task.maintain.reenable", len(toEnable)))
@@ -728,8 +737,16 @@ func (b *Backend) runMaintain(ctx context.Context, settings AppSettings) (Mainta
 }
 
 func (b *Backend) probeAccounts(ctx context.Context, kind string, settings AppSettings, records []AccountRecord) ([]UsageProbeResult, error) {
+	return b.probeAccountsWithPhase(ctx, kind, "probe", settings, records)
+}
+
+func (b *Backend) reconfirmRecoveredAccounts(ctx context.Context, kind string, settings AppSettings, records []AccountRecord) ([]UsageProbeResult, error) {
+	return b.probeAccountsWithPhase(ctx, kind, "reconfirm", settings, records)
+}
+
+func (b *Backend) probeAccountsWithPhase(ctx context.Context, kind string, phase string, settings AppSettings, records []AccountRecord) ([]UsageProbeResult, error) {
 	if len(records) == 0 {
-		b.emitProgress(kind, "probe", 0, 0, msg(settings.Locale, "task.scan.no_candidates"), true)
+		b.emitProgress(kind, phase, 0, 0, msg(settings.Locale, "task.scan.no_candidates"), true)
 		return nil, nil
 	}
 
@@ -769,7 +786,7 @@ func (b *Backend) probeAccounts(ctx context.Context, kind string, settings AppSe
 			results[index] = probed
 			current := int(atomic.AddInt64(&completed, 1))
 			b.emitDetailedLog(settings.DetailedLogs, kind, probeLogLevel(probed.Record), msg(settings.Locale, "task.scan.single_probe", probed.Record.Name, stateLabel(settings.Locale, probed.Record.StateKey)))
-			b.emitProgress(kind, "probe", current, len(records), msg(settings.Locale, "task.scan.probed_account", probed.Record.Name), current == len(records))
+			b.emitProgress(kind, phase, current, len(records), msg(settings.Locale, "task.scan.probed_account", probed.Record.Name), current == len(records))
 		}(index, record)
 	}
 
