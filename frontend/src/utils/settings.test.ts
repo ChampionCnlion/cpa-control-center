@@ -14,6 +14,11 @@ describe('validateSettings', () => {
     expect(settings.quotaFreeMaxAccounts).toBe(100)
     expect(settings.quotaAutoRefreshEnabled).toBe(false)
     expect(settings.quotaAutoRefreshCron).toBe('')
+    expect(settings.quotaRecoveryMinRemainingPercent).toBe(2)
+    expect(settings.quotaRecoveryConfirmationPasses).toBe(2)
+    expect(settings.quotaRecoveryLookaheadMinutes).toBe(30)
+    expect(settings.quotaRecoveryFallbackProbeHours).toBe(6)
+    expect(settings.quotaRecoveryProbeLimit).toBe(50)
     settings.baseUrl = 'https://example.com'
     settings.managementToken = 'token'
 
@@ -27,6 +32,11 @@ describe('validateSettings', () => {
     settings.probeWorkers = 0
     settings.quotaWorkers = 0
     settings.quotaFreeMaxAccounts = -2
+    settings.quotaRecoveryMinRemainingPercent = 0
+    settings.quotaRecoveryConfirmationPasses = 0
+    settings.quotaRecoveryLookaheadMinutes = -1
+    settings.quotaRecoveryFallbackProbeHours = 0
+    settings.quotaRecoveryProbeLimit = 0
 
     expect(validateSettings(settings)).toMatchObject({
       baseUrl: expect.any(String),
@@ -34,6 +44,11 @@ describe('validateSettings', () => {
       probeWorkers: expect.any(String),
       quotaWorkers: expect.any(String),
       quotaFreeMaxAccounts: expect.any(String),
+      quotaRecoveryMinRemainingPercent: expect.any(String),
+      quotaRecoveryConfirmationPasses: expect.any(String),
+      quotaRecoveryLookaheadMinutes: expect.any(String),
+      quotaRecoveryFallbackProbeHours: expect.any(String),
+      quotaRecoveryProbeLimit: expect.any(String),
     })
   })
 

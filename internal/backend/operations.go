@@ -528,6 +528,7 @@ func (b *Backend) runScan(ctx context.Context, kind string, settings AppSettings
 
 	summary.TotalAccounts = len(records)
 	summary.FilteredAccounts = filteredAccounts
+	probeCandidates, probeCandidateIndexes = limitQuotaRecoveryProbeCandidates(settings, probeCandidates, probeCandidateIndexes)
 	b.emitLog(kind, "info", msg(settings.Locale, "task.scan.prepared_candidates", len(probeCandidates), len(records)))
 
 	selectedCandidates := probeCandidates
@@ -690,21 +691,16 @@ func (b *Backend) runMaintain(ctx context.Context, settings AppSettings) (Mainta
 	}
 
 	if settings.AutoReenable && len(recovered) > 0 {
-		reconfirmed, err := b.reconfirmRecoveredAccounts(ctx, "maintain", settings, recovered)
-		if err != nil {
-			return result, err
-		}
-
 		var toEnable []string
-		for _, probe := range reconfirmed {
-			recordMap[probe.Record.Name] = probe.Record
-			if slices.Contains(deletedNames, probe.Record.Name) {
+		requiredPasses := quotaRecoveryConfirmationPasses(settings)
+		for _, record := range recovered {
+			if slices.Contains(deletedNames, record.Name) {
 				continue
 			}
-			if normalizeStateKey(probe.Record.StateKey) != stateRecovered {
+			if record.RecoveryPassCount < requiredPasses {
 				continue
 			}
-			toEnable = append(toEnable, probe.Record.Name)
+			toEnable = append(toEnable, record.Name)
 		}
 		if len(toEnable) > 0 {
 			b.emitLog("maintain", "info", msg(settings.Locale, "task.maintain.reenable", len(toEnable)))
@@ -925,6 +921,10 @@ func applyDisableResults(records map[string]AccountRecord, results []ActionResul
 				record.StateKey = stateNormal
 				record.State = stateNormal
 				record.Recovered = false
+				record.QuotaBlockedUntil = ""
+				record.RecoveryNextProbeAt = ""
+				record.RecoveryPassCount = 0
+				record.RecoveryLastPassedAt = ""
 			}
 		}
 		records[result.Name] = record

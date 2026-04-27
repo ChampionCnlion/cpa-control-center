@@ -217,6 +217,21 @@ func (s *Store) LoadSettings() (AppSettings, error) {
 	if _, ok := keys["quotaAutoRefreshCron"]; !ok {
 		raw.QuotaAutoRefreshCron = defaults.QuotaAutoRefreshCron
 	}
+	if _, ok := keys["quotaRecoveryMinRemainingPercent"]; !ok {
+		raw.QuotaRecoveryMinRemainingPercent = defaults.QuotaRecoveryMinRemainingPercent
+	}
+	if _, ok := keys["quotaRecoveryConfirmationPasses"]; !ok {
+		raw.QuotaRecoveryConfirmationPasses = defaults.QuotaRecoveryConfirmationPasses
+	}
+	if _, ok := keys["quotaRecoveryLookaheadMinutes"]; !ok {
+		raw.QuotaRecoveryLookaheadMinutes = defaults.QuotaRecoveryLookaheadMinutes
+	}
+	if _, ok := keys["quotaRecoveryFallbackProbeHours"]; !ok {
+		raw.QuotaRecoveryFallbackProbeHours = defaults.QuotaRecoveryFallbackProbeHours
+	}
+	if _, ok := keys["quotaRecoveryProbeLimit"]; !ok {
+		raw.QuotaRecoveryProbeLimit = defaults.QuotaRecoveryProbeLimit
+	}
 
 	return normalizeSettings(raw, s.exportsDir), nil
 }

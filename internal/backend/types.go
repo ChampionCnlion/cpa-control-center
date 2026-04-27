@@ -26,6 +26,11 @@ type AppSettings struct {
 	QuotaFreeMaxAccounts    int              `json:"quotaFreeMaxAccounts"`
 	QuotaAutoRefreshEnabled bool             `json:"quotaAutoRefreshEnabled"`
 	QuotaAutoRefreshCron    string           `json:"quotaAutoRefreshCron"`
+	QuotaRecoveryMinRemainingPercent int     `json:"quotaRecoveryMinRemainingPercent"`
+	QuotaRecoveryConfirmationPasses  int     `json:"quotaRecoveryConfirmationPasses"`
+	QuotaRecoveryLookaheadMinutes    int     `json:"quotaRecoveryLookaheadMinutes"`
+	QuotaRecoveryFallbackProbeHours  int     `json:"quotaRecoveryFallbackProbeHours"`
+	QuotaRecoveryProbeLimit          int     `json:"quotaRecoveryProbeLimit"`
 	Delete401               bool             `json:"delete401"`
 	AutoReenable            bool             `json:"autoReenable"`
 	ExportDirectory         string           `json:"exportDirectory"`
@@ -101,6 +106,10 @@ type AccountRecord struct {
 	LastSeenAt       string `json:"lastSeenAt"`
 	LastProbedAt     string `json:"lastProbedAt"`
 	UpdatedAt        string `json:"updatedAt"`
+	QuotaBlockedUntil   string `json:"quotaBlockedUntil"`
+	RecoveryNextProbeAt string `json:"recoveryNextProbeAt"`
+	RecoveryPassCount   int    `json:"recoveryPassCount"`
+	RecoveryLastPassedAt string `json:"recoveryLastPassedAt"`
 	ChatGPTAccountID string `json:"chatgptAccountId"`
 	IDTokenPlanType  string `json:"idTokenPlanType"`
 	AuthUpdatedAt    string `json:"authUpdatedAt"`

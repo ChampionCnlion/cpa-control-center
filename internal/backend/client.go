@@ -142,6 +142,10 @@ func (c *Client) BuildAccountRecord(item map[string]any, previous *AccountRecord
 		record.LastAction = previous.LastAction
 		record.LastActionStatus = previous.LastActionStatus
 		record.LastActionError = previous.LastActionError
+		record.QuotaBlockedUntil = previous.QuotaBlockedUntil
+		record.RecoveryNextProbeAt = previous.RecoveryNextProbeAt
+		record.RecoveryPassCount = previous.RecoveryPassCount
+		record.RecoveryLastPassedAt = previous.RecoveryLastPassedAt
 	}
 	return record
 }
@@ -291,6 +295,14 @@ func (c *Client) probeUsageOnce(ctx context.Context, settings AppSettings, recor
 	if planType := strings.TrimSpace(stringValue(parsedBody["plan_type"])); planType != "" {
 		result.Record.PlanType = planType
 	}
+	var quotaResult *quotaBucketResult
+	if parsed, quotaErr := parseQuotaBucketResult(parsedBody); quotaErr == nil {
+		quotaResult = &parsed
+		if quotaPrimaryLimitReached(result.Record.PlanType, parsed) {
+			result.Record.Allowed = boolPtr(false)
+			result.Record.LimitReached = boolPtr(true)
+		}
+	}
 
 	if statusCode != http.StatusOK {
 		result.Record.ProbeErrorKind = "unexpected_status"
@@ -301,6 +313,7 @@ func (c *Client) probeUsageOnce(ctx context.Context, settings AppSettings, recor
 	}
 
 	result.Record = classifyAccountState(result.Record)
+	result.Record = applyProbeRecoveryPolicy(settings, result.Record, quotaResult, time.Now().UTC())
 	return result
 }
 

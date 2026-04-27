@@ -32,6 +32,11 @@ export function createDefaultSettings(): AppSettings {
     quotaFreeMaxAccounts: 100,
     quotaAutoRefreshEnabled: false,
     quotaAutoRefreshCron: '',
+    quotaRecoveryMinRemainingPercent: 2,
+    quotaRecoveryConfirmationPasses: 2,
+    quotaRecoveryLookaheadMinutes: 30,
+    quotaRecoveryFallbackProbeHours: 6,
+    quotaRecoveryProbeLimit: 50,
     delete401: true,
     autoReenable: true,
     exportDirectory: '',
@@ -85,6 +90,21 @@ export function validateSettings(settings: AppSettings, t: Translate = fallbackT
     } else if (!isValidCronExpression(settings.quotaAutoRefreshCron)) {
       errors.quotaAutoRefreshCron = t('validation.quotaAutoRefreshCronInvalid')
     }
+  }
+  if (settings.quotaRecoveryMinRemainingPercent < 1) {
+    errors.quotaRecoveryMinRemainingPercent = t('validation.quotaRecoveryMinRemainingPercentMin')
+  }
+  if (settings.quotaRecoveryConfirmationPasses < 1) {
+    errors.quotaRecoveryConfirmationPasses = t('validation.quotaRecoveryConfirmationPassesMin')
+  }
+  if (settings.quotaRecoveryLookaheadMinutes < 0) {
+    errors.quotaRecoveryLookaheadMinutes = t('validation.quotaRecoveryLookaheadMinutesMin')
+  }
+  if (settings.quotaRecoveryFallbackProbeHours < 1) {
+    errors.quotaRecoveryFallbackProbeHours = t('validation.quotaRecoveryFallbackProbeHoursMin')
+  }
+  if (settings.quotaRecoveryProbeLimit < 1) {
+    errors.quotaRecoveryProbeLimit = t('validation.quotaRecoveryProbeLimitMin')
   }
   if (settings.schedule.enabled) {
     if (!['scan', 'maintain'].includes(settings.schedule.mode)) {

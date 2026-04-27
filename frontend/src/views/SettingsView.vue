@@ -42,6 +42,11 @@ const infoCopy = computed<Record<string, string>>(() => (
         quotaFreeMaxAccounts: '限制 free 套餐最多查询多少个账号的额度。填 -1 表示不限数量。',
         quotaPlanToggles: '只有开启的套餐会在 Codex 额度页中被查询和展示。默认关闭 free，避免浪费请求。',
         quotaAutoRefreshCron: '启用后，应用会按这个 5 段 Cron 表达式在后台自动刷新 Codex 额度，并把进度写入任务日志。',
+        quotaRecoveryMinRemainingPercent: '一个因额度被禁用的账号，主额度桶至少要达到这个剩余百分比，才会被当作可恢复。',
+        quotaRecoveryConfirmationPasses: '账号连续多少轮探测都通过后，才真正恢复启用。数值越大越稳，但恢复更慢。',
+        quotaRecoveryLookaheadMinutes: '距离预测恢复时间还有多久时，开始提前探测禁用账号。越小越省请求，越大越容易更早发现提前恢复。',
+        quotaRecoveryFallbackProbeHours: '如果拿不到可靠的恢复时间，就按这个小时间隔再次探测一次禁用账号。',
+        quotaRecoveryProbeLimit: '单次扫描或维护里，最多允许多少个禁用限额账号进入恢复探测，避免同一时间打太多请求。',
         scheduleMode: '扫描只执行定时健康检查。维护会先扫描，再按当前设置执行删除、禁用或恢复动作。',
         scheduleCron: '使用本地时区的标准 5 段 cron：分钟 小时 日 月 星期。示例：0 */6 * * *。',
       }
@@ -58,6 +63,11 @@ const infoCopy = computed<Record<string, string>>(() => (
         quotaFreeMaxAccounts: 'Limits how many free accounts can be queried on the quota page. Use -1 for unlimited.',
         quotaPlanToggles: 'Only enabled plans are queried and shown on the Codex quota page. Free is off by default to avoid wasting calls.',
         quotaAutoRefreshCron: 'When enabled, the app refreshes Codex quotas in the background using this 5-field cron expression and writes progress to task logs.',
+        quotaRecoveryMinRemainingPercent: 'A quota-disabled account must keep at least this much remaining percentage in the primary quota buckets before it can be treated as recovered.',
+        quotaRecoveryConfirmationPasses: 'How many separate successful probe passes are required before the account is re-enabled. Higher values are safer but slower.',
+        quotaRecoveryLookaheadMinutes: 'Start retrying quota-disabled accounts this many minutes before the predicted reset time. Smaller values reduce pressure; larger values detect early recovery sooner.',
+        quotaRecoveryFallbackProbeHours: 'When no reliable reset time is available, wait this many hours before probing the disabled account again.',
+        quotaRecoveryProbeLimit: 'Caps how many quota-disabled accounts can be re-probed for recovery in one scan or maintain run.',
         scheduleMode: 'Scan runs a scheduled health check only. Maintain first scans, then executes maintenance actions using the current settings.',
         scheduleCron: 'Uses standard 5-field cron in your local timezone: minute hour day month weekday. Example: 0 */6 * * *.',
       }
@@ -176,7 +186,7 @@ async function changeLocale(locale: string) {
                 <span>{{ t('settings.targetType') }}</span>
                 <el-popover trigger="click" placement="top-start" :width="320" popper-class="settings-info-popover">
                   <template #reference>
-                    <button type="button" class="info-trigger" :aria-label="infoAriaLabel">i</button>
+                    <button type="button" class="info-trigger" :aria-label="infoAriaLabel">?</button>
                   </template>
                   <div class="settings-info-popover__content">
                     <strong>{{ t('settings.targetType') }}</strong>
@@ -196,7 +206,7 @@ async function changeLocale(locale: string) {
                 <span>{{ t('settings.scanStrategy') }}</span>
                 <el-popover trigger="click" placement="top-start" :width="320" popper-class="settings-info-popover">
                   <template #reference>
-                    <button type="button" class="info-trigger" :aria-label="infoAriaLabel">i</button>
+                    <button type="button" class="info-trigger" :aria-label="infoAriaLabel">?</button>
                   </template>
                   <div class="settings-info-popover__content">
                     <strong>{{ t('settings.scanStrategy') }}</strong>
@@ -216,7 +226,7 @@ async function changeLocale(locale: string) {
                 <span>{{ t('settings.scanBatchSize') }}</span>
                 <el-popover trigger="click" placement="top-start" :width="320" popper-class="settings-info-popover">
                   <template #reference>
-                    <button type="button" class="info-trigger" :aria-label="infoAriaLabel">i</button>
+                    <button type="button" class="info-trigger" :aria-label="infoAriaLabel">?</button>
                   </template>
                   <div class="settings-info-popover__content">
                     <strong>{{ t('settings.scanBatchSize') }}</strong>
@@ -233,7 +243,7 @@ async function changeLocale(locale: string) {
                 <span>{{ t('settings.probeWorkers') }}</span>
                 <el-popover trigger="click" placement="top-start" :width="320" popper-class="settings-info-popover">
                   <template #reference>
-                    <button type="button" class="info-trigger" :aria-label="infoAriaLabel">i</button>
+                    <button type="button" class="info-trigger" :aria-label="infoAriaLabel">?</button>
                   </template>
                   <div class="settings-info-popover__content">
                     <strong>{{ t('settings.probeWorkers') }}</strong>
@@ -250,7 +260,7 @@ async function changeLocale(locale: string) {
                 <span>{{ t('settings.actionWorkers') }}</span>
                 <el-popover trigger="click" placement="top-start" :width="320" popper-class="settings-info-popover">
                   <template #reference>
-                    <button type="button" class="info-trigger" :aria-label="infoAriaLabel">i</button>
+                    <button type="button" class="info-trigger" :aria-label="infoAriaLabel">?</button>
                   </template>
                   <div class="settings-info-popover__content">
                     <strong>{{ t('settings.actionWorkers') }}</strong>
@@ -267,7 +277,7 @@ async function changeLocale(locale: string) {
                 <span>{{ t('settings.timeoutSeconds') }}</span>
                 <el-popover trigger="click" placement="top-start" :width="320" popper-class="settings-info-popover">
                   <template #reference>
-                    <button type="button" class="info-trigger" :aria-label="infoAriaLabel">i</button>
+                    <button type="button" class="info-trigger" :aria-label="infoAriaLabel">?</button>
                   </template>
                   <div class="settings-info-popover__content">
                     <strong>{{ t('settings.timeoutSeconds') }}</strong>
@@ -284,7 +294,7 @@ async function changeLocale(locale: string) {
                 <span>{{ t('settings.retries') }}</span>
                 <el-popover trigger="click" placement="top-start" :width="320" popper-class="settings-info-popover">
                   <template #reference>
-                    <button type="button" class="info-trigger" :aria-label="infoAriaLabel">i</button>
+                    <button type="button" class="info-trigger" :aria-label="infoAriaLabel">?</button>
                   </template>
                   <div class="settings-info-popover__content">
                     <strong>{{ t('settings.retries') }}</strong>
@@ -301,7 +311,7 @@ async function changeLocale(locale: string) {
                 <span>{{ t('settings.quotaAction') }}</span>
                 <el-popover trigger="click" placement="top-start" :width="320" popper-class="settings-info-popover">
                   <template #reference>
-                    <button type="button" class="info-trigger" :aria-label="infoAriaLabel">i</button>
+                    <button type="button" class="info-trigger" :aria-label="infoAriaLabel">?</button>
                   </template>
                   <div class="settings-info-popover__content">
                     <strong>{{ t('settings.quotaAction') }}</strong>
@@ -348,7 +358,7 @@ async function changeLocale(locale: string) {
                   <span>{{ t('settings.quotaWorkers') }}</span>
                   <el-popover trigger="click" placement="top-start" :width="320" popper-class="settings-info-popover">
                     <template #reference>
-                      <button type="button" class="info-trigger" :aria-label="infoAriaLabel">i</button>
+                      <button type="button" class="info-trigger" :aria-label="infoAriaLabel">?</button>
                     </template>
                     <div class="settings-info-popover__content">
                       <strong>{{ t('settings.quotaWorkers') }}</strong>
@@ -366,7 +376,7 @@ async function changeLocale(locale: string) {
                   <span>{{ t('settings.quotaFreeMaxAccounts') }}</span>
                   <el-popover trigger="click" placement="top-start" :width="320" popper-class="settings-info-popover">
                     <template #reference>
-                      <button type="button" class="info-trigger" :aria-label="infoAriaLabel">i</button>
+                      <button type="button" class="info-trigger" :aria-label="infoAriaLabel">?</button>
                     </template>
                     <div class="settings-info-popover__content">
                       <strong>{{ t('settings.quotaFreeMaxAccounts') }}</strong>
@@ -387,7 +397,7 @@ async function changeLocale(locale: string) {
                 <span>{{ t('settings.quotaPlanToggles') }}</span>
                 <el-popover trigger="click" placement="top-start" :width="320" popper-class="settings-info-popover">
                   <template #reference>
-                    <button type="button" class="info-trigger" :aria-label="infoAriaLabel">i</button>
+                    <button type="button" class="info-trigger" :aria-label="infoAriaLabel">?</button>
                   </template>
                   <div class="settings-info-popover__content">
                     <strong>{{ t('settings.quotaPlanToggles') }}</strong>
@@ -416,7 +426,7 @@ async function changeLocale(locale: string) {
                   <span>{{ t('settings.quotaAutoRefreshCron') }}</span>
                   <el-popover trigger="click" placement="top-start" :width="320" popper-class="settings-info-popover">
                     <template #reference>
-                      <button type="button" class="info-trigger" :aria-label="infoAriaLabel">i</button>
+                      <button type="button" class="info-trigger" :aria-label="infoAriaLabel">?</button>
                     </template>
                     <div class="settings-info-popover__content">
                       <strong>{{ t('settings.quotaAutoRefreshCron') }}</strong>
@@ -432,6 +442,132 @@ async function changeLocale(locale: string) {
               />
             </el-form-item>
           </div>
+
+          <div class="panel-head panel-head--tight">
+            <div>
+              <p class="panel-kicker">{{ t('settings.quotaRecoverySection') }}</p>
+              <h3>{{ t('settings.quotaRecoveryTitle') }}</h3>
+            </div>
+          </div>
+
+          <div class="settings-grid settings-grid--schedule">
+            <el-form-item :error="settingsStore.errors.quotaRecoveryMinRemainingPercent">
+              <template #label>
+                <span class="form-label-with-info">
+                  <span>{{ t('settings.quotaRecoveryMinRemainingPercent') }}</span>
+                  <el-popover trigger="click" placement="top-start" :width="320" popper-class="settings-info-popover">
+                    <template #reference>
+                      <button type="button" class="info-trigger" :aria-label="infoAriaLabel">?</button>
+                    </template>
+                    <div class="settings-info-popover__content">
+                      <strong>{{ t('settings.quotaRecoveryMinRemainingPercent') }}</strong>
+                      <p>{{ infoText('quotaRecoveryMinRemainingPercent') }}</p>
+                    </div>
+                  </el-popover>
+                </span>
+              </template>
+              <el-input-number
+                v-model="settingsStore.settings.quotaRecoveryMinRemainingPercent"
+                :min="1"
+                :max="100"
+                :disabled="!settingsStore.settings.autoReenable"
+              />
+            </el-form-item>
+
+            <el-form-item :error="settingsStore.errors.quotaRecoveryConfirmationPasses">
+              <template #label>
+                <span class="form-label-with-info">
+                  <span>{{ t('settings.quotaRecoveryConfirmationPasses') }}</span>
+                  <el-popover trigger="click" placement="top-start" :width="320" popper-class="settings-info-popover">
+                    <template #reference>
+                      <button type="button" class="info-trigger" :aria-label="infoAriaLabel">?</button>
+                    </template>
+                    <div class="settings-info-popover__content">
+                      <strong>{{ t('settings.quotaRecoveryConfirmationPasses') }}</strong>
+                      <p>{{ infoText('quotaRecoveryConfirmationPasses') }}</p>
+                    </div>
+                  </el-popover>
+                </span>
+              </template>
+              <el-input-number
+                v-model="settingsStore.settings.quotaRecoveryConfirmationPasses"
+                :min="1"
+                :max="10"
+                :disabled="!settingsStore.settings.autoReenable"
+              />
+            </el-form-item>
+
+            <el-form-item :error="settingsStore.errors.quotaRecoveryLookaheadMinutes">
+              <template #label>
+                <span class="form-label-with-info">
+                  <span>{{ t('settings.quotaRecoveryLookaheadMinutes') }}</span>
+                  <el-popover trigger="click" placement="top-start" :width="320" popper-class="settings-info-popover">
+                    <template #reference>
+                      <button type="button" class="info-trigger" :aria-label="infoAriaLabel">?</button>
+                    </template>
+                    <div class="settings-info-popover__content">
+                      <strong>{{ t('settings.quotaRecoveryLookaheadMinutes') }}</strong>
+                      <p>{{ infoText('quotaRecoveryLookaheadMinutes') }}</p>
+                    </div>
+                  </el-popover>
+                </span>
+              </template>
+              <el-input-number
+                v-model="settingsStore.settings.quotaRecoveryLookaheadMinutes"
+                :min="0"
+                :max="1440"
+                :disabled="!settingsStore.settings.autoReenable"
+              />
+            </el-form-item>
+
+            <el-form-item :error="settingsStore.errors.quotaRecoveryFallbackProbeHours">
+              <template #label>
+                <span class="form-label-with-info">
+                  <span>{{ t('settings.quotaRecoveryFallbackProbeHours') }}</span>
+                  <el-popover trigger="click" placement="top-start" :width="320" popper-class="settings-info-popover">
+                    <template #reference>
+                      <button type="button" class="info-trigger" :aria-label="infoAriaLabel">?</button>
+                    </template>
+                    <div class="settings-info-popover__content">
+                      <strong>{{ t('settings.quotaRecoveryFallbackProbeHours') }}</strong>
+                      <p>{{ infoText('quotaRecoveryFallbackProbeHours') }}</p>
+                    </div>
+                  </el-popover>
+                </span>
+              </template>
+              <el-input-number
+                v-model="settingsStore.settings.quotaRecoveryFallbackProbeHours"
+                :min="1"
+                :max="168"
+                :disabled="!settingsStore.settings.autoReenable"
+              />
+            </el-form-item>
+
+            <el-form-item :error="settingsStore.errors.quotaRecoveryProbeLimit">
+              <template #label>
+                <span class="form-label-with-info">
+                  <span>{{ t('settings.quotaRecoveryProbeLimit') }}</span>
+                  <el-popover trigger="click" placement="top-start" :width="320" popper-class="settings-info-popover">
+                    <template #reference>
+                      <button type="button" class="info-trigger" :aria-label="infoAriaLabel">?</button>
+                    </template>
+                    <div class="settings-info-popover__content">
+                      <strong>{{ t('settings.quotaRecoveryProbeLimit') }}</strong>
+                      <p>{{ infoText('quotaRecoveryProbeLimit') }}</p>
+                    </div>
+                  </el-popover>
+                </span>
+              </template>
+              <el-input-number
+                v-model="settingsStore.settings.quotaRecoveryProbeLimit"
+                :min="1"
+                :max="1000"
+                :disabled="!settingsStore.settings.autoReenable"
+              />
+            </el-form-item>
+          </div>
+
+          <p class="muted">{{ t('settings.quotaRecoveryHint') }}</p>
         </section>
 
         <section class="settings-schedule">
@@ -453,7 +589,7 @@ async function changeLocale(locale: string) {
                   <span>{{ t('settings.scheduleMode') }}</span>
                   <el-popover trigger="click" placement="top-start" :width="320" popper-class="settings-info-popover">
                     <template #reference>
-                      <button type="button" class="info-trigger" :aria-label="infoAriaLabel">i</button>
+                      <button type="button" class="info-trigger" :aria-label="infoAriaLabel">?</button>
                     </template>
                     <div class="settings-info-popover__content">
                       <strong>{{ t('settings.scheduleMode') }}</strong>
@@ -473,7 +609,7 @@ async function changeLocale(locale: string) {
                   <span>{{ t('settings.scheduleCron') }}</span>
                   <el-popover trigger="click" placement="top-start" :width="320" popper-class="settings-info-popover">
                     <template #reference>
-                      <button type="button" class="info-trigger" :aria-label="infoAriaLabel">i</button>
+                      <button type="button" class="info-trigger" :aria-label="infoAriaLabel">?</button>
                     </template>
                     <div class="settings-info-popover__content">
                       <strong>{{ t('settings.scheduleCron') }}</strong>

@@ -23,6 +23,11 @@ const (
 	defaultQuotaFreeMaxAccounts = 100
 	defaultScheduleMode         = "scan"
 	defaultUserAgent            = "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal"
+	defaultQuotaRecoveryMinRemainingPercent = 2
+	defaultQuotaRecoveryConfirmationPasses  = 2
+	defaultQuotaRecoveryLookaheadMinutes    = 30
+	defaultQuotaRecoveryFallbackProbeHours  = 6
+	defaultQuotaRecoveryProbeLimit          = 50
 	defaultHistoryLimit         = 30
 	whamUsageURL                = "https://chatgpt.com/backend-api/wham/usage"
 )
@@ -51,6 +56,11 @@ func defaultSettings(exportDir string) AppSettings {
 		QuotaFreeMaxAccounts: defaultQuotaFreeMaxAccounts,
 		QuotaAutoRefreshEnabled: false,
 		QuotaAutoRefreshCron:    "",
+		QuotaRecoveryMinRemainingPercent: defaultQuotaRecoveryMinRemainingPercent,
+		QuotaRecoveryConfirmationPasses:  defaultQuotaRecoveryConfirmationPasses,
+		QuotaRecoveryLookaheadMinutes:    defaultQuotaRecoveryLookaheadMinutes,
+		QuotaRecoveryFallbackProbeHours:  defaultQuotaRecoveryFallbackProbeHours,
+		QuotaRecoveryProbeLimit:          defaultQuotaRecoveryProbeLimit,
 		Delete401:            true,
 		AutoReenable:         true,
 		ExportDirectory:      exportDir,
@@ -120,6 +130,21 @@ func normalizeSettings(input AppSettings, exportDir string) AppSettings {
 	}
 	settings.QuotaAutoRefreshEnabled = input.QuotaAutoRefreshEnabled
 	settings.QuotaAutoRefreshCron = strings.TrimSpace(input.QuotaAutoRefreshCron)
+	if input.QuotaRecoveryMinRemainingPercent >= 1 {
+		settings.QuotaRecoveryMinRemainingPercent = input.QuotaRecoveryMinRemainingPercent
+	}
+	if input.QuotaRecoveryConfirmationPasses >= 1 {
+		settings.QuotaRecoveryConfirmationPasses = input.QuotaRecoveryConfirmationPasses
+	}
+	if input.QuotaRecoveryLookaheadMinutes >= 0 {
+		settings.QuotaRecoveryLookaheadMinutes = input.QuotaRecoveryLookaheadMinutes
+	}
+	if input.QuotaRecoveryFallbackProbeHours >= 1 {
+		settings.QuotaRecoveryFallbackProbeHours = input.QuotaRecoveryFallbackProbeHours
+	}
+	if input.QuotaRecoveryProbeLimit >= 1 {
+		settings.QuotaRecoveryProbeLimit = input.QuotaRecoveryProbeLimit
+	}
 	settings.Delete401 = input.Delete401
 	settings.AutoReenable = input.AutoReenable
 	if trimmed := strings.TrimSpace(input.ExportDirectory); trimmed != "" {
@@ -282,6 +307,11 @@ func shouldProbeCandidate(record AccountRecord, settings AppSettings) bool {
 	if settings.SkipKnown401 && normalizeStateKey(record.StateKey) == stateInvalid401 {
 		return false
 	}
+	if settings.AutoReenable && isQuotaRecoveryManaged(record) {
+		if nextProbeAt, ok := parseRFC3339(record.RecoveryNextProbeAt); ok && nextProbeAt.After(time.Now().UTC()) {
+			return false
+		}
+	}
 	return true
 }
 
@@ -342,6 +372,10 @@ func markPending(record AccountRecord) AccountRecord {
 	record.QuotaLimited = false
 	record.Recovered = false
 	record.Error = false
+	record.QuotaBlockedUntil = ""
+	record.RecoveryNextProbeAt = ""
+	record.RecoveryPassCount = 0
+	record.RecoveryLastPassedAt = ""
 	return sanitizeRecord(record)
 }
 
@@ -482,6 +516,9 @@ func sanitizeRecord(record AccountRecord) AccountRecord {
 	if record.Status == "" {
 		record.Status = record.StateKey
 	}
+	if record.RecoveryPassCount < 0 {
+		record.RecoveryPassCount = 0
+	}
 	return record
 }
 
@@ -501,6 +538,10 @@ func carryProbeSnapshot(record AccountRecord, previous AccountRecord) AccountRec
 	record.ProbeErrorKind = previous.ProbeErrorKind
 	record.ProbeErrorText = stringOr(previous.ProbeErrorText, record.ProbeErrorText)
 	record.LastProbedAt = previous.LastProbedAt
+	record.QuotaBlockedUntil = previous.QuotaBlockedUntil
+	record.RecoveryNextProbeAt = previous.RecoveryNextProbeAt
+	record.RecoveryPassCount = previous.RecoveryPassCount
+	record.RecoveryLastPassedAt = previous.RecoveryLastPassedAt
 	if record.PlanType == "" {
 		record.PlanType = previous.PlanType
 	}

@@ -37,6 +37,11 @@ export interface AppSettings {
   quotaFreeMaxAccounts: number
   quotaAutoRefreshEnabled: boolean
   quotaAutoRefreshCron: string
+  quotaRecoveryMinRemainingPercent: number
+  quotaRecoveryConfirmationPasses: number
+  quotaRecoveryLookaheadMinutes: number
+  quotaRecoveryFallbackProbeHours: number
+  quotaRecoveryProbeLimit: number
   delete401: boolean
   autoReenable: boolean
   exportDirectory: string
