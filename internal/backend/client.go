@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -290,6 +291,10 @@ func (c *Client) probeUsageOnce(ctx context.Context, settings AppSettings, recor
 	if planType := strings.TrimSpace(stringValue(parsedBody["plan_type"])); planType != "" {
 		result.Record.PlanType = planType
 	}
+	if quotaResult, quotaErr := parseQuotaBucketResult(parsedBody); quotaErr == nil && quotaPrimaryLimitReached(result.Record.PlanType, quotaResult) {
+		result.Record.Allowed = boolPtr(false)
+		result.Record.LimitReached = boolPtr(true)
+	}
 
 	if statusCode != http.StatusOK {
 		result.Record.ProbeErrorKind = "unexpected_status"
@@ -569,13 +574,14 @@ func waitForRetry(ctx context.Context, delay time.Duration) error {
 
 func classifyAccountState(record AccountRecord) AccountRecord {
 	usageLimitReached := record.ProbeErrorKind == "usage_limit_reached"
+	inventoryUsageLimitActive := hasActiveInventoryUsageLimit(record.StatusMessage, time.Now().UTC())
 	hasLiveProbeSignal := record.APIStatusCode != nil ||
 		record.Allowed != nil ||
 		record.LimitReached != nil ||
 		record.ProbeErrorKind != ""
 	inventoryUnavailable := record.Unavailable && !hasLiveProbeSignal
 	record.Invalid401 = inventoryUnavailable || (intValue(record.APIStatusCode) == http.StatusUnauthorized && !usageLimitReached)
-	record.QuotaLimited = !record.Invalid401 && ((intValue(record.APIStatusCode) == http.StatusOK && boolValue(record.LimitReached)) || usageLimitReached)
+	record.QuotaLimited = !record.Invalid401 && (inventoryUsageLimitActive || (intValue(record.APIStatusCode) == http.StatusOK && boolValue(record.LimitReached)) || usageLimitReached)
 	record.Recovered = !record.Invalid401 &&
 		!record.QuotaLimited &&
 		record.Disabled &&
@@ -657,6 +663,82 @@ func findUsageLimitErrorPayload(payload any) map[string]any {
 		}
 	}
 	return nil
+}
+
+func hasActiveInventoryUsageLimit(statusMessage string, now time.Time) bool {
+	errorPayload := findUsageLimitErrorPayload(statusMessage)
+	if len(errorPayload) == 0 {
+		return false
+	}
+
+	resetAt, ok := usageLimitResetAt(errorPayload, now)
+	if !ok {
+		return false
+	}
+	return resetAt.After(now)
+}
+
+func usageLimitResetAt(payload map[string]any, now time.Time) (time.Time, bool) {
+	if len(payload) == 0 {
+		return time.Time{}, false
+	}
+
+	if resetAt, ok := parseUsageLimitResetUnix(payload["resets_at"]); ok {
+		return resetAt, true
+	}
+	if resetAt, ok := parseUsageLimitResetRFC3339(payload["resets_at"]); ok {
+		return resetAt, true
+	}
+	if seconds, ok := parseUsageLimitResetSeconds(payload["resets_in_seconds"]); ok && seconds > 0 {
+		return now.Add(time.Duration(seconds) * time.Second), true
+	}
+
+	return time.Time{}, false
+}
+
+func parseUsageLimitResetUnix(value any) (time.Time, bool) {
+	if parsed, ok := intValueFromAny(value); ok && parsed > 0 {
+		return time.Unix(int64(parsed), 0).UTC(), true
+	}
+
+	trimmed := strings.TrimSpace(stringValue(value))
+	if trimmed == "" {
+		return time.Time{}, false
+	}
+	parsed, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil || parsed <= 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(parsed, 0).UTC(), true
+}
+
+func parseUsageLimitResetRFC3339(value any) (time.Time, bool) {
+	trimmed := strings.TrimSpace(stringValue(value))
+	if trimmed == "" {
+		return time.Time{}, false
+	}
+
+	parsed, err := time.Parse(time.RFC3339, trimmed)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed.UTC(), true
+}
+
+func parseUsageLimitResetSeconds(value any) (int, bool) {
+	if parsed, ok := intValueFromAny(value); ok {
+		return parsed, true
+	}
+
+	trimmed := strings.TrimSpace(stringValue(value))
+	if trimmed == "" {
+		return 0, false
+	}
+	parsed, err := strconv.Atoi(trimmed)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
 }
 
 func extractChatGPTAccountID(item map[string]any) string {
