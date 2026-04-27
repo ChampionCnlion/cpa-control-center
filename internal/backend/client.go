@@ -291,10 +291,6 @@ func (c *Client) probeUsageOnce(ctx context.Context, settings AppSettings, recor
 	if planType := strings.TrimSpace(stringValue(parsedBody["plan_type"])); planType != "" {
 		result.Record.PlanType = planType
 	}
-	if quotaResult, quotaErr := parseQuotaBucketResult(parsedBody); quotaErr == nil && quotaPrimaryLimitReached(result.Record.PlanType, quotaResult) {
-		result.Record.Allowed = boolPtr(false)
-		result.Record.LimitReached = boolPtr(true)
-	}
 
 	if statusCode != http.StatusOK {
 		result.Record.ProbeErrorKind = "unexpected_status"

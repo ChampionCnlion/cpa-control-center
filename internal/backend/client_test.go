@@ -698,64 +698,6 @@ func TestClientProbeKeepsInventoryUsageLimitActiveBeforeResetAt(t *testing.T) {
 	}
 }
 
-func TestClientProbeKeepsQuotaDisabledAccountLimitedWhenWeeklyBucketIsStillEmpty(t *testing.T) {
-	t.Parallel()
-
-	var hits int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/v0/management/api-call":
-			atomic.AddInt32(&hits, 1)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"status_code": 200,
-				"body": `{
-					"plan_type":"pro",
-					"rate_limit":{"allowed":true,"limit_reached":false},
-					"rate_limits":{
-						"five_hour":{"used_percent":20,"reset_at":"2026-03-16T04:45:00Z","window_seconds":18000},
-						"weekly":{"used_percent":100,"reset_at":"2026-03-17T13:01:00Z","window_seconds":604800}
-					}
-				}`,
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-
-	client := NewClient()
-	client.retryDelay = 0
-	settings := AppSettings{
-		BaseURL:         server.URL,
-		ManagementToken: "token",
-		Locale:          localeEnglish,
-		TimeoutSeconds:  5,
-		Retries:         0,
-		UserAgent:       defaultUserAgent,
-	}
-
-	record := AccountRecord{
-		Name:             "quota-disabled.json",
-		AuthIndex:        "quota-disabled",
-		Type:             "codex",
-		Provider:         "codex",
-		ChatGPTAccountID: "acct-quota-disabled",
-		Disabled:         true,
-		ManagedReason:    "quota_disabled",
-	}
-
-	probed := client.ProbeUsage(context.Background(), settings, record)
-	if probed.StateKey != stateQuotaLimited {
-		t.Fatalf("expected quota_limited while weekly bucket is still empty, got %+v", probed)
-	}
-	if probed.Recovered {
-		t.Fatalf("quota-disabled account must not be marked recovered before primary quota returns, got %+v", probed)
-	}
-	if atomic.LoadInt32(&hits) != 1 {
-		t.Fatalf("expected 1 probe attempt, got %d", hits)
-	}
-}
-
 func TestClientProbeTreatsDoubleEncodedUsageLimit401AsQuotaLimited(t *testing.T) {
 	t.Parallel()
 
