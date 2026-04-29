@@ -6,7 +6,41 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 )
+
+func TestLimitQuotaRecoveryProbeCandidatesPrefersDueOverUninitialized(t *testing.T) {
+	now := time.Now().UTC()
+	candidates := []AccountRecord{
+		{
+			Name:          "uninitialized.json",
+			Disabled:      true,
+			ManagedReason: "quota_disabled",
+			StateKey:      stateQuotaLimited,
+		},
+		{
+			Name:                "due.json",
+			Disabled:            true,
+			ManagedReason:       "quota_disabled",
+			StateKey:            stateQuotaLimited,
+			RecoveryNextProbeAt: now.Add(-time.Minute).Format(time.RFC3339),
+		},
+		{
+			Name:          "regular.json",
+			StateKey:      stateNormal,
+			ManagedReason: "",
+		},
+	}
+
+	selected, indexes := limitQuotaRecoveryProbeCandidates(AppSettings{QuotaRecoveryProbeLimit: 1}, candidates, []int{0, 1, 2})
+
+	if len(selected) != 2 || selected[0].Name != "regular.json" || selected[1].Name != "due.json" {
+		t.Fatalf("expected regular candidate plus due recovery candidate, got %+v", selected)
+	}
+	if len(indexes) != 2 || indexes[0] != 2 || indexes[1] != 1 {
+		t.Fatalf("expected selected indexes [2 1], got %+v", indexes)
+	}
+}
 
 func TestBackendMaintainRequiresMultipleRecoveredPassesBeforeReenable(t *testing.T) {
 	var (
@@ -63,18 +97,18 @@ func TestBackendMaintainRequiresMultipleRecoveredPassesBeforeReenable(t *testing
 	defer service.Close()
 
 	_, err = service.SaveSettings(AppSettings{
-		BaseURL:         server.URL,
-		ManagementToken: "token",
-		Locale:          localeEnglish,
-		TargetType:      "codex",
-		ProbeWorkers:    2,
-		ActionWorkers:   1,
-		TimeoutSeconds:  5,
-		Retries:         0,
-		UserAgent: defaultUserAgent,
-		QuotaAction: "disable",
-		AutoReenable: true,
-		QuotaRecoveryConfirmationPasses: 2,
+		BaseURL:                          server.URL,
+		ManagementToken:                  "token",
+		Locale:                           localeEnglish,
+		TargetType:                       "codex",
+		ProbeWorkers:                     2,
+		ActionWorkers:                    1,
+		TimeoutSeconds:                   5,
+		Retries:                          0,
+		UserAgent:                        defaultUserAgent,
+		QuotaAction:                      "disable",
+		AutoReenable:                     true,
+		QuotaRecoveryConfirmationPasses:  2,
 		QuotaRecoveryMinRemainingPercent: 2,
 	})
 	if err != nil {

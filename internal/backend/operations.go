@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 func (b *Backend) RunScan() (ScanSummary, error) {
@@ -528,8 +529,13 @@ func (b *Backend) runScan(ctx context.Context, kind string, settings AppSettings
 
 	summary.TotalAccounts = len(records)
 	summary.FilteredAccounts = filteredAccounts
+	unlimitedProbeCandidates := probeCandidates
 	probeCandidates, probeCandidateIndexes = limitQuotaRecoveryProbeCandidates(settings, probeCandidates, probeCandidateIndexes)
 	b.emitLog(kind, "info", msg(settings.Locale, "task.scan.prepared_candidates", len(probeCandidates), len(records)))
+	recoveryStats := quotaRecoveryProbeStats(unlimitedProbeCandidates, probeCandidates, time.Now().UTC())
+	if recoveryStats.Total > 0 {
+		b.emitLog(kind, "info", msg(settings.Locale, "task.scan.recovery_candidates", recoveryStats.Total, recoveryStats.Due, recoveryStats.Uninitialized, recoveryStats.Selected, recoveryStats.SelectedDue))
+	}
 
 	selectedCandidates := probeCandidates
 	selectedIndexes := probeCandidateIndexes

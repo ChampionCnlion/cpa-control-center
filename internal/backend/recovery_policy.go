@@ -7,6 +7,14 @@ import (
 	"time"
 )
 
+type quotaRecoveryCandidateStats struct {
+	Total         int
+	Due           int
+	Uninitialized int
+	Selected      int
+	SelectedDue   int
+}
+
 func isQuotaRecoveryManaged(record AccountRecord) bool {
 	return record.Disabled && strings.TrimSpace(record.ManagedReason) == "quota_disabled"
 }
@@ -183,6 +191,42 @@ func parseAndCompareAfter(value string, now time.Time) bool {
 	return ok && parsed.After(now)
 }
 
+func quotaRecoveryProbeRank(record AccountRecord, now time.Time) int {
+	if nextProbeAt, ok := parseRFC3339(record.RecoveryNextProbeAt); ok {
+		if !nextProbeAt.After(now) {
+			return 0
+		}
+		return 2
+	}
+	return 1
+}
+
+func quotaRecoveryProbeStats(candidates []AccountRecord, selected []AccountRecord, now time.Time) quotaRecoveryCandidateStats {
+	stats := quotaRecoveryCandidateStats{}
+	for _, candidate := range candidates {
+		if !isQuotaRecoveryManaged(candidate) {
+			continue
+		}
+		stats.Total++
+		switch quotaRecoveryProbeRank(candidate, now) {
+		case 0:
+			stats.Due++
+		case 1:
+			stats.Uninitialized++
+		}
+	}
+	for _, candidate := range selected {
+		if !isQuotaRecoveryManaged(candidate) {
+			continue
+		}
+		stats.Selected++
+		if quotaRecoveryProbeRank(candidate, now) == 0 {
+			stats.SelectedDue++
+		}
+	}
+	return stats
+}
+
 func limitQuotaRecoveryProbeCandidates(settings AppSettings, candidates []AccountRecord, indexes []int) ([]AccountRecord, []int) {
 	if len(candidates) == 0 {
 		return candidates, indexes
@@ -205,6 +249,7 @@ func limitQuotaRecoveryProbeCandidates(settings AppSettings, candidates []Accoun
 		return candidates, indexes
 	}
 
+	now := time.Now().UTC()
 	order := make([]int, len(recoveryCandidates))
 	for i := range recoveryCandidates {
 		order[i] = i
@@ -212,6 +257,11 @@ func limitQuotaRecoveryProbeCandidates(settings AppSettings, candidates []Accoun
 	sort.Slice(order, func(i int, j int) bool {
 		left := recoveryCandidates[order[i]]
 		right := recoveryCandidates[order[j]]
+		leftRank := quotaRecoveryProbeRank(left, now)
+		rightRank := quotaRecoveryProbeRank(right, now)
+		if leftRank != rightRank {
+			return leftRank < rightRank
+		}
 		if left.RecoveryNextProbeAt != right.RecoveryNextProbeAt {
 			return left.RecoveryNextProbeAt < right.RecoveryNextProbeAt
 		}
