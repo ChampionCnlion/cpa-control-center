@@ -557,6 +557,10 @@ func (b *Backend) runScan(ctx context.Context, kind string, settings AppSettings
 		b.emitLog(kind, "warning", msg(settings.Locale, "task.scan.stopped", taskName(settings.Locale, kind), err))
 		return summary, nil, nil, err
 	}
+	recoveryOutcomeStats := quotaRecoveryProbeOutcomeStats(probed)
+	if recoveryOutcomeStats.WaitingConfirmation > 0 || recoveryOutcomeStats.ReadyToReenable > 0 || recoveryOutcomeStats.ThresholdBlocked > 0 {
+		b.emitLog(kind, "info", msg(settings.Locale, "task.scan.recovery_outcomes", recoveryOutcomeStats.WaitingConfirmation, recoveryOutcomeStats.ReadyToReenable, recoveryOutcomeStats.ThresholdBlocked))
+	}
 
 	for i, index := range selectedIndexes {
 		records[index] = probed[i].Record
@@ -725,6 +729,10 @@ func (b *Backend) runMaintain(ctx context.Context, settings AppSettings) (Mainta
 			}
 			applyDisableResults(recordMap, result.ReenableResults, "reenable_quota", "", false)
 		}
+	}
+	recoveryOutcomeStats := quotaRecoveryProbeOutcomeStats(probes)
+	if settings.AutoReenable && !settings.Schedule.Enabled && recoveryOutcomeStats.WaitingConfirmation > 0 {
+		b.emitLog("maintain", "warning", msg(settings.Locale, "task.maintain.recovery_waiting_manual", recoveryOutcomeStats.WaitingConfirmation))
 	}
 
 	finalRecords := recordsFromMap(recordMap)

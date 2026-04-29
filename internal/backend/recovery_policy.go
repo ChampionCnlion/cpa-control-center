@@ -17,6 +17,12 @@ type quotaRecoveryCandidateStats struct {
 	SelectedConfirming int
 }
 
+type quotaRecoveryOutcomeStats struct {
+	WaitingConfirmation int
+	ReadyToReenable     int
+	ThresholdBlocked    int
+}
+
 func isQuotaRecoveryManaged(record AccountRecord) bool {
 	return record.Disabled && strings.TrimSpace(record.ManagedReason) == "quota_disabled"
 }
@@ -100,14 +106,16 @@ func applyProbeRecoveryPolicy(settings AppSettings, record AccountRecord, quotaR
 		record.RecoveryLastPassedAt = ""
 	case managed && record.Recovered:
 		record.QuotaBlockedUntil = ""
-		record.RecoveryNextProbeAt = ""
 		record.RecoveryPassCount++
 		record.RecoveryLastPassedAt = now.Format(time.RFC3339)
 		if record.RecoveryPassCount < quotaRecoveryConfirmationPasses(settings) {
+			record.RecoveryNextProbeAt = now.Format(time.RFC3339)
 			record.QuotaLimited = true
 			record.Recovered = false
 			record.StateKey = stateQuotaLimited
 			record.State = stateQuotaLimited
+		} else {
+			record.RecoveryNextProbeAt = ""
 		}
 	case managed:
 		record.RecoveryPassCount = 0
@@ -232,6 +240,25 @@ func quotaRecoveryProbeStats(candidates []AccountRecord, selected []AccountRecor
 			stats.SelectedConfirming++
 		case 1:
 			stats.SelectedDue++
+		}
+	}
+	return stats
+}
+
+func quotaRecoveryProbeOutcomeStats(probes []UsageProbeResult) quotaRecoveryOutcomeStats {
+	stats := quotaRecoveryOutcomeStats{}
+	for _, probe := range probes {
+		record := probe.Record
+		if !isQuotaRecoveryManaged(record) {
+			continue
+		}
+		switch {
+		case normalizeStateKey(record.StateKey) == stateRecovered && record.RecoveryPassCount > 0 && record.RecoveryLastPassedAt != "":
+			stats.ReadyToReenable++
+		case normalizeStateKey(record.StateKey) == stateQuotaLimited && record.RecoveryPassCount > 0:
+			stats.WaitingConfirmation++
+		case normalizeStateKey(record.StateKey) == stateQuotaLimited && intValue(record.APIStatusCode) == http.StatusOK && !record.Invalid401 && !record.Error && !boolValue(record.LimitReached):
+			stats.ThresholdBlocked++
 		}
 	}
 	return stats

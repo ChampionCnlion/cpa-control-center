@@ -186,6 +186,9 @@ func TestBackendMaintainRequiresMultipleRecoveredPassesBeforeReenable(t *testing
 	if records[0].StateKey != stateQuotaLimited || !records[0].Disabled || records[0].RecoveryPassCount != 1 {
 		t.Fatalf("expected account to remain quota-limited and disabled after first recovered pass, got %+v", records[0])
 	}
+	if records[0].RecoveryNextProbeAt == "" {
+		t.Fatalf("expected account awaiting second confirmation to keep a next probe time, got %+v", records[0])
+	}
 
 	secondResult, err := service.RunMaintain(MaintainOptions{
 		QuotaAction:  "disable",
