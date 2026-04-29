@@ -65,6 +65,11 @@ func New(dataDir string, emitter EventEmitter) (*Backend, error) {
 		_ = store.Close()
 		return nil, err
 	}
+	if err := service.repairPendingQuotaManagedStates(); err != nil {
+		_ = logger.Close()
+		_ = store.Close()
+		return nil, err
+	}
 	service.scheduler.ApplySettings(settings)
 
 	return service, nil
@@ -137,6 +142,57 @@ func (b *Backend) saveSettings(input AppSettings) (AppSettings, error) {
 	}
 	b.emitLog("scan", "info", msg(settings.Locale, "settings.saved", stringOr(settings.BaseURL, "(empty)")))
 	return settings, nil
+}
+
+func (b *Backend) repairPendingQuotaManagedStates() error {
+	existing, err := b.store.LoadCurrentMap()
+	if err != nil {
+		return err
+	}
+
+	names := make([]string, 0)
+	for _, record := range existing {
+		if normalizeStateKey(record.StateKey) == statePending && isQuotaRecoveryManaged(record) {
+			names = append(names, record.Name)
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+
+	history, err := b.store.LoadLastProbedHistoryMap(names)
+	if err != nil {
+		return err
+	}
+
+	repairedCount := 0
+	for _, name := range names {
+		current := existing[name]
+		repaired := current
+		if historical, ok := history[name]; ok {
+			repaired = restorePendingManagedProbeSnapshot(current, historical)
+		}
+		if normalizeStateKey(repaired.StateKey) == statePending {
+			repaired = carryQuotaManagedState(repaired, current)
+		}
+		if repaired.StateKey == current.StateKey &&
+			repaired.LastProbedAt == current.LastProbedAt &&
+			repaired.RecoveryNextProbeAt == current.RecoveryNextProbeAt &&
+			repaired.QuotaBlockedUntil == current.QuotaBlockedUntil &&
+			repaired.RecoveryPassCount == current.RecoveryPassCount &&
+			repaired.RecoveryLastPassedAt == current.RecoveryLastPassedAt {
+			continue
+		}
+		if err := b.store.UpsertCurrentAccount(repaired); err != nil {
+			return err
+		}
+		repairedCount++
+	}
+
+	if repairedCount > 0 {
+		b.emitLog("scan", "info", fmt.Sprintf("repaired %d quota-managed pending account states from history", repairedCount))
+	}
+	return nil
 }
 
 func (b *Backend) TestConnection(input AppSettings) (ConnectionResult, error) {

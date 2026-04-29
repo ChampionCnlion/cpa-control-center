@@ -277,6 +277,51 @@ func (s *Store) LoadCurrentMap() (map[string]AccountRecord, error) {
 	return records, rows.Err()
 }
 
+func (s *Store) LoadLastProbedHistoryMap(names []string) (map[string]AccountRecord, error) {
+	result := make(map[string]AccountRecord)
+	if len(names) == 0 {
+		return result, nil
+	}
+
+	placeholders := strings.TrimRight(strings.Repeat("?,", len(names)), ",")
+	args := make([]any, 0, len(names))
+	for _, name := range names {
+		args = append(args, name)
+	}
+
+	rows, err := s.db.Query(
+		`SELECT data_json
+		   FROM scan_records
+		  WHERE name IN (`+placeholders+`)
+		  ORDER BY run_id DESC`,
+		args...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var data string
+		if err := rows.Scan(&data); err != nil {
+			return nil, err
+		}
+		record, err := parseRecord(data)
+		if err != nil {
+			return nil, err
+		}
+		if record.LastProbedAt == "" {
+			continue
+		}
+		if _, ok := result[record.Name]; ok {
+			continue
+		}
+		result[record.Name] = record
+	}
+
+	return result, rows.Err()
+}
+
 func (s *Store) ListAccounts(filter AccountFilter) ([]AccountRecord, error) {
 	query, args := currentAccountsSelectQuery(filter)
 	rows, err := s.db.Query(query, args...)

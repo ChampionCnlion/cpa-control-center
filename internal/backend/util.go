@@ -11,59 +11,59 @@ import (
 )
 
 const (
-	defaultTargetType           = "codex"
-	defaultScanStrategy         = "full"
-	defaultScanBatchSize        = 1000
-	defaultProbeWorkers         = 40
-	defaultActionWorkers        = 20
-	defaultQuotaWorkers         = 10
-	defaultTimeout              = 15
-	defaultRetries              = 3
-	defaultQuotaAction          = "disable"
-	defaultQuotaFreeMaxAccounts = 100
-	defaultScheduleMode         = "scan"
-	defaultUserAgent            = "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal"
+	defaultTargetType                       = "codex"
+	defaultScanStrategy                     = "full"
+	defaultScanBatchSize                    = 1000
+	defaultProbeWorkers                     = 40
+	defaultActionWorkers                    = 20
+	defaultQuotaWorkers                     = 10
+	defaultTimeout                          = 15
+	defaultRetries                          = 3
+	defaultQuotaAction                      = "disable"
+	defaultQuotaFreeMaxAccounts             = 100
+	defaultScheduleMode                     = "scan"
+	defaultUserAgent                        = "codex_cli_rs/0.76.0 (Debian 13.0.0; x86_64) WindowsTerminal"
 	defaultQuotaRecoveryMinRemainingPercent = 2
 	defaultQuotaRecoveryConfirmationPasses  = 2
 	defaultQuotaRecoveryLookaheadMinutes    = 30
 	defaultQuotaRecoveryFallbackProbeHours  = 6
 	defaultQuotaRecoveryProbeLimit          = 50
-	defaultHistoryLimit         = 30
-	whamUsageURL                = "https://chatgpt.com/backend-api/wham/usage"
+	defaultHistoryLimit                     = 30
+	whamUsageURL                            = "https://chatgpt.com/backend-api/wham/usage"
 )
 
 func defaultSettings(exportDir string) AppSettings {
 	return AppSettings{
-		Locale:               localeOrDefault(""),
-		DetailedLogs:         false,
-		TargetType:           defaultTargetType,
-		ScanStrategy:         defaultScanStrategy,
-		ScanBatchSize:        defaultScanBatchSize,
-		SkipKnown401:         true,
-		ProbeWorkers:         defaultProbeWorkers,
-		ActionWorkers:        defaultActionWorkers,
-		QuotaWorkers:         defaultQuotaWorkers,
-		TimeoutSeconds:       defaultTimeout,
-		Retries:              defaultRetries,
-		UserAgent:            defaultUserAgent,
-		QuotaAction:          defaultQuotaAction,
-		QuotaCheckFree:       false,
-		QuotaCheckPlus:       true,
-		QuotaCheckPro:        true,
-		QuotaCheckTeam:       true,
-		QuotaCheckBusiness:   true,
-		QuotaCheckEnterprise: true,
-		QuotaFreeMaxAccounts: defaultQuotaFreeMaxAccounts,
-		QuotaAutoRefreshEnabled: false,
-		QuotaAutoRefreshCron:    "",
+		Locale:                           localeOrDefault(""),
+		DetailedLogs:                     false,
+		TargetType:                       defaultTargetType,
+		ScanStrategy:                     defaultScanStrategy,
+		ScanBatchSize:                    defaultScanBatchSize,
+		SkipKnown401:                     true,
+		ProbeWorkers:                     defaultProbeWorkers,
+		ActionWorkers:                    defaultActionWorkers,
+		QuotaWorkers:                     defaultQuotaWorkers,
+		TimeoutSeconds:                   defaultTimeout,
+		Retries:                          defaultRetries,
+		UserAgent:                        defaultUserAgent,
+		QuotaAction:                      defaultQuotaAction,
+		QuotaCheckFree:                   false,
+		QuotaCheckPlus:                   true,
+		QuotaCheckPro:                    true,
+		QuotaCheckTeam:                   true,
+		QuotaCheckBusiness:               true,
+		QuotaCheckEnterprise:             true,
+		QuotaFreeMaxAccounts:             defaultQuotaFreeMaxAccounts,
+		QuotaAutoRefreshEnabled:          false,
+		QuotaAutoRefreshCron:             "",
 		QuotaRecoveryMinRemainingPercent: defaultQuotaRecoveryMinRemainingPercent,
 		QuotaRecoveryConfirmationPasses:  defaultQuotaRecoveryConfirmationPasses,
 		QuotaRecoveryLookaheadMinutes:    defaultQuotaRecoveryLookaheadMinutes,
 		QuotaRecoveryFallbackProbeHours:  defaultQuotaRecoveryFallbackProbeHours,
 		QuotaRecoveryProbeLimit:          defaultQuotaRecoveryProbeLimit,
-		Delete401:            true,
-		AutoReenable:         true,
-		ExportDirectory:      exportDir,
+		Delete401:                        true,
+		AutoReenable:                     true,
+		ExportDirectory:                  exportDir,
 		Schedule: ScheduleSettings{
 			Enabled: false,
 			Mode:    defaultScheduleMode,
@@ -316,6 +316,9 @@ func shouldProbeCandidate(record AccountRecord, settings AppSettings) bool {
 }
 
 func inventoryFingerprintChanged(record AccountRecord, previous AccountRecord) bool {
+	if isQuotaRecoveryManaged(previous) {
+		return quotaManagedInventoryFingerprintChanged(record, previous)
+	}
 	if record.AuthIndex != previous.AuthIndex {
 		return true
 	}
@@ -353,6 +356,32 @@ func inventoryFingerprintChanged(record AccountRecord, previous AccountRecord) b
 		return true
 	}
 	if record.AuthLastRefresh != previous.AuthLastRefresh {
+		return true
+	}
+	return false
+}
+
+func quotaManagedInventoryFingerprintChanged(record AccountRecord, previous AccountRecord) bool {
+	if record.Provider != previous.Provider {
+		return true
+	}
+	if record.Type != previous.Type {
+		return true
+	}
+	if record.Source != previous.Source {
+		return true
+	}
+
+	recordAccountID := strings.TrimSpace(record.ChatGPTAccountID)
+	previousAccountID := strings.TrimSpace(previous.ChatGPTAccountID)
+	if recordAccountID != "" || previousAccountID != "" {
+		return recordAccountID != previousAccountID
+	}
+
+	if record.AuthIndex != previous.AuthIndex {
+		return true
+	}
+	if record.Account != previous.Account {
 		return true
 	}
 	return false
@@ -561,5 +590,49 @@ func carryInventorySnapshot(record AccountRecord, previous *AccountRecord) Accou
 		}
 		return carryProbeSnapshot(record, *previous)
 	}
+	if isQuotaRecoveryManaged(*previous) {
+		if inventoryFingerprintChanged(record, *previous) {
+			return markPending(record)
+		}
+		return carryQuotaManagedState(record, *previous)
+	}
 	return markPending(record)
+}
+
+func carryQuotaManagedState(record AccountRecord, previous AccountRecord) AccountRecord {
+	record.State = stateQuotaLimited
+	record.StateKey = stateQuotaLimited
+	record.Status = stateQuotaLimited
+	record.StatusMessage = stringOr(record.StatusMessage, previous.StatusMessage)
+	record.QuotaLimited = true
+	record.Recovered = false
+	record.Error = false
+	record.Invalid401 = false
+	record.QuotaBlockedUntil = previous.QuotaBlockedUntil
+	record.RecoveryNextProbeAt = previous.RecoveryNextProbeAt
+	record.RecoveryPassCount = previous.RecoveryPassCount
+	record.RecoveryLastPassedAt = previous.RecoveryLastPassedAt
+	if record.PlanType == "" {
+		record.PlanType = previous.PlanType
+	}
+	if record.Email == "" {
+		record.Email = previous.Email
+	}
+	return sanitizeRecord(record)
+}
+
+func restorePendingManagedProbeSnapshot(current AccountRecord, historical AccountRecord) AccountRecord {
+	if !isQuotaRecoveryManaged(current) || current.LastProbedAt != "" || historical.LastProbedAt == "" {
+		return current
+	}
+	restored := carryProbeSnapshot(current, historical)
+	restored.ManagedReason = current.ManagedReason
+	restored.LastAction = current.LastAction
+	restored.LastActionStatus = current.LastActionStatus
+	restored.LastActionError = current.LastActionError
+	restored.Disabled = current.Disabled
+	restored.Unavailable = current.Unavailable
+	restored.LastSeenAt = current.LastSeenAt
+	restored.UpdatedAt = current.UpdatedAt
+	return sanitizeRecord(restored)
 }

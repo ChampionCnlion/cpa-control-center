@@ -487,6 +487,21 @@ func (b *Backend) runScan(ctx context.Context, kind string, settings AppSettings
 		summary.Message = err.Error()
 		return summary, nil, nil, err
 	}
+	pendingManagedNames := make([]string, 0)
+	for _, current := range existing {
+		if normalizeStateKey(current.StateKey) == statePending && isQuotaRecoveryManaged(current) {
+			pendingManagedNames = append(pendingManagedNames, current.Name)
+		}
+	}
+	lastProbedHistory := make(map[string]AccountRecord)
+	if len(pendingManagedNames) > 0 {
+		lastProbedHistory, err = b.store.LoadLastProbedHistoryMap(pendingManagedNames)
+		if err != nil {
+			summary.Status = "failed"
+			summary.Message = err.Error()
+			return summary, nil, nil, err
+		}
+	}
 
 	timestamp := nowISO()
 	probeCandidates := make([]AccountRecord, 0, len(files))
@@ -502,6 +517,9 @@ func (b *Backend) runScan(ctx context.Context, kind string, settings AppSettings
 		var previous *AccountRecord
 		if current, ok := existing[name]; ok {
 			currentCopy := current
+			if historical, ok := lastProbedHistory[name]; ok {
+				currentCopy = restorePendingManagedProbeSnapshot(currentCopy, historical)
+			}
 			previous = &currentCopy
 		}
 		record := b.client.BuildAccountRecord(item, previous, timestamp)
