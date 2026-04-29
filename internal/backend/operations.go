@@ -534,7 +534,7 @@ func (b *Backend) runScan(ctx context.Context, kind string, settings AppSettings
 	b.emitLog(kind, "info", msg(settings.Locale, "task.scan.prepared_candidates", len(probeCandidates), len(records)))
 	recoveryStats := quotaRecoveryProbeStats(unlimitedProbeCandidates, probeCandidates, time.Now().UTC())
 	if recoveryStats.Total > 0 {
-		b.emitLog(kind, "info", msg(settings.Locale, "task.scan.recovery_candidates", recoveryStats.Total, recoveryStats.Due, recoveryStats.Uninitialized, recoveryStats.Selected, recoveryStats.SelectedDue))
+		b.emitLog(kind, "info", msg(settings.Locale, "task.scan.recovery_candidates", recoveryStats.Total, recoveryStats.Confirming, recoveryStats.Due, recoveryStats.Uninitialized, recoveryStats.Selected, recoveryStats.SelectedConfirming, recoveryStats.SelectedDue))
 	}
 
 	selectedCandidates := probeCandidates
@@ -630,15 +630,12 @@ func (b *Backend) runMaintain(ctx context.Context, settings AppSettings) (Mainta
 	filtered := filterAccountsBySettings(records, settings)
 	var invalid []AccountRecord
 	var quota []AccountRecord
-	var recovered []AccountRecord
 	for _, record := range filtered {
 		switch normalizeStateKey(record.StateKey) {
 		case stateInvalid401:
 			invalid = append(invalid, record)
 		case stateQuotaLimited:
 			quota = append(quota, record)
-		case stateRecovered:
-			recovered = append(recovered, record)
 		}
 	}
 
@@ -696,14 +693,24 @@ func (b *Backend) runMaintain(ctx context.Context, settings AppSettings) (Mainta
 		}
 	}
 
-	if settings.AutoReenable && len(recovered) > 0 {
+	if settings.AutoReenable {
 		var toEnable []string
 		requiredPasses := quotaRecoveryConfirmationPasses(settings)
-		for _, record := range recovered {
+		for _, probe := range probes {
+			record := probe.Record
+			if normalizeStateKey(record.StateKey) != stateRecovered {
+				continue
+			}
+			if !isQuotaRecoveryManaged(record) {
+				continue
+			}
 			if slices.Contains(deletedNames, record.Name) {
 				continue
 			}
 			if record.RecoveryPassCount < requiredPasses {
+				continue
+			}
+			if record.RecoveryLastPassedAt == "" {
 				continue
 			}
 			toEnable = append(toEnable, record.Name)

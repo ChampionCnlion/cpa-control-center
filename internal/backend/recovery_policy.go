@@ -8,11 +8,13 @@ import (
 )
 
 type quotaRecoveryCandidateStats struct {
-	Total         int
-	Due           int
-	Uninitialized int
-	Selected      int
-	SelectedDue   int
+	Total              int
+	Due                int
+	Confirming         int
+	Uninitialized      int
+	Selected           int
+	SelectedDue        int
+	SelectedConfirming int
 }
 
 func isQuotaRecoveryManaged(record AccountRecord) bool {
@@ -192,13 +194,16 @@ func parseAndCompareAfter(value string, now time.Time) bool {
 }
 
 func quotaRecoveryProbeRank(record AccountRecord, now time.Time) int {
+	if record.RecoveryPassCount > 0 {
+		return 0
+	}
 	if nextProbeAt, ok := parseRFC3339(record.RecoveryNextProbeAt); ok {
 		if !nextProbeAt.After(now) {
-			return 0
+			return 1
 		}
-		return 2
+		return 3
 	}
-	return 1
+	return 2
 }
 
 func quotaRecoveryProbeStats(candidates []AccountRecord, selected []AccountRecord, now time.Time) quotaRecoveryCandidateStats {
@@ -210,8 +215,10 @@ func quotaRecoveryProbeStats(candidates []AccountRecord, selected []AccountRecor
 		stats.Total++
 		switch quotaRecoveryProbeRank(candidate, now) {
 		case 0:
-			stats.Due++
+			stats.Confirming++
 		case 1:
+			stats.Due++
+		case 2:
 			stats.Uninitialized++
 		}
 	}
@@ -220,7 +227,10 @@ func quotaRecoveryProbeStats(candidates []AccountRecord, selected []AccountRecor
 			continue
 		}
 		stats.Selected++
-		if quotaRecoveryProbeRank(candidate, now) == 0 {
+		switch quotaRecoveryProbeRank(candidate, now) {
+		case 0:
+			stats.SelectedConfirming++
+		case 1:
 			stats.SelectedDue++
 		}
 	}
