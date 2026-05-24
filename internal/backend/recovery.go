@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -14,11 +15,13 @@ import (
 	"net"
 	"net/http"
 	"net/http/cookiejar"
+	"net/textproto"
 	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -549,7 +552,11 @@ func recoveryBrowserUserAgent(configured string) string {
 
 func newOpenAIRecoveryHTTPClient(timeout time.Duration, jar http.CookieJar, stopRedirects bool) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if proxyURL := recoveryProxyURL(); proxyURL != "" {
+	proxyURL := recoveryProxyURL()
+	var roundTripper http.RoundTripper = transport
+	if curlBin := recoveryCurlImpersonateBin(); curlBin != "" {
+		roundTripper = curlImpersonateTransport{bin: curlBin, proxyURL: proxyURL}
+	} else if proxyURL != "" {
 		if err := applyRecoveryProxy(transport, proxyURL); err != nil {
 			// Keep direct networking available; the request error will still expose
 			// upstream Cloudflare/proxy failures to the recovery result.
@@ -559,7 +566,7 @@ func newOpenAIRecoveryHTTPClient(timeout time.Duration, jar http.CookieJar, stop
 	client := &http.Client{
 		Timeout:   timeout,
 		Jar:       jar,
-		Transport: transport,
+		Transport: roundTripper,
 	}
 	if stopRedirects {
 		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
@@ -567,6 +574,160 @@ func newOpenAIRecoveryHTTPClient(timeout time.Duration, jar http.CookieJar, stop
 		}
 	}
 	return client
+}
+
+type curlImpersonateTransport struct {
+	bin      string
+	proxyURL string
+}
+
+func recoveryCurlImpersonateBin() string {
+	for _, candidate := range []string{
+		strings.TrimSpace(os.Getenv("CPA_CONTROL_CENTER_CURL_IMPERSONATE_BIN")),
+		"/usr/local/bin/curl_ff117",
+		"curl_ff117",
+	} {
+		if candidate == "" {
+			continue
+		}
+		if path, err := exec.LookPath(candidate); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
+func (t curlImpersonateTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req == nil {
+		return nil, errors.New("nil request")
+	}
+	headerFile, err := os.CreateTemp("", "cpa-recovery-curl-headers-*")
+	if err != nil {
+		return nil, err
+	}
+	headerPath := headerFile.Name()
+	_ = headerFile.Close()
+	defer os.Remove(headerPath)
+
+	bodyFile, err := os.CreateTemp("", "cpa-recovery-curl-body-*")
+	if err != nil {
+		return nil, err
+	}
+	bodyPath := bodyFile.Name()
+	_ = bodyFile.Close()
+	defer os.Remove(bodyPath)
+
+	args := []string{
+		"--silent",
+		"--show-error",
+		"--compressed",
+		"--http2",
+		"--request", req.Method,
+		"--dump-header", headerPath,
+		"--output", bodyPath,
+	}
+	if t.proxyURL != "" {
+		args = append(args, "--proxy", t.proxyURL)
+	}
+	for key, values := range req.Header {
+		if strings.EqualFold(key, "Content-Length") || strings.EqualFold(key, "Accept-Encoding") {
+			continue
+		}
+		for _, value := range values {
+			args = append(args, "--header", key+": "+value)
+		}
+	}
+	var requestBodyPath string
+	if req.Body != nil {
+		data, readErr := io.ReadAll(req.Body)
+		_ = req.Body.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if len(data) > 0 {
+			bodyInput, createErr := os.CreateTemp("", "cpa-recovery-curl-input-*")
+			if createErr != nil {
+				return nil, createErr
+			}
+			requestBodyPath = bodyInput.Name()
+			if _, writeErr := bodyInput.Write(data); writeErr != nil {
+				_ = bodyInput.Close()
+				_ = os.Remove(requestBodyPath)
+				return nil, writeErr
+			}
+			if closeErr := bodyInput.Close(); closeErr != nil {
+				_ = os.Remove(requestBodyPath)
+				return nil, closeErr
+			}
+			defer os.Remove(requestBodyPath)
+			args = append(args, "--data-binary", "@"+requestBodyPath)
+		}
+	}
+	args = append(args, req.URL.String())
+
+	cmd := exec.CommandContext(req.Context(), t.bin, args...)
+	stderr, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("curl impersonate request failed: %w: %s", err, normalizeText(string(stderr), 260))
+	}
+
+	headerBytes, err := os.ReadFile(headerPath)
+	if err != nil {
+		return nil, err
+	}
+	responseBody, err := os.ReadFile(bodyPath)
+	if err != nil {
+		return nil, err
+	}
+	statusCode, status, headers, err := parseCurlResponseHeaders(string(headerBytes))
+	if err != nil {
+		return nil, err
+	}
+	return &http.Response{
+		StatusCode:    statusCode,
+		Status:        status,
+		Header:        headers,
+		Body:          io.NopCloser(bytes.NewReader(responseBody)),
+		ContentLength: int64(len(responseBody)),
+		Request:       req,
+	}, nil
+}
+
+func parseCurlResponseHeaders(raw string) (int, string, http.Header, error) {
+	blocks := strings.Split(strings.ReplaceAll(raw, "\r\n", "\n"), "\n\n")
+	var block string
+	for i := len(blocks) - 1; i >= 0; i-- {
+		if strings.TrimSpace(blocks[i]) != "" {
+			block = strings.TrimSpace(blocks[i])
+			break
+		}
+	}
+	if block == "" {
+		return 0, "", nil, errors.New("curl returned no response headers")
+	}
+	reader := bufio.NewReader(strings.NewReader(block + "\n\n"))
+	statusLine, err := reader.ReadString('\n')
+	if err != nil {
+		return 0, "", nil, err
+	}
+	statusLine = strings.TrimSpace(statusLine)
+	parts := strings.Fields(statusLine)
+	if len(parts) < 2 {
+		return 0, "", nil, fmt.Errorf("invalid curl status line %q", statusLine)
+	}
+	code, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, "", nil, fmt.Errorf("invalid curl status code %q: %w", parts[1], err)
+	}
+	mimeHeader, err := textproto.NewReader(reader).ReadMIMEHeader()
+	if err != nil {
+		return 0, "", nil, err
+	}
+	statusText := strings.TrimSpace(strings.TrimPrefix(statusLine, parts[0]+" "+parts[1]))
+	if statusText == "" {
+		statusText = http.StatusText(code)
+	}
+	return code, fmt.Sprintf("%d %s", code, statusText), http.Header(mimeHeader), nil
 }
 
 func recoveryProxyURL() string {
