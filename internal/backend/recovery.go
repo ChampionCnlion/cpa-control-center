@@ -9,21 +9,26 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
+
+	xproxy "golang.org/x/net/proxy"
 )
 
 const (
-	defaultRecoveryEmailServiceURL = "https://postinbox.org/mailbox"
-	chatGPTSessionURL              = "https://chatgpt.com/api/auth/session"
-	chatGPTCSRFURL                 = "https://chatgpt.com/api/auth/csrf"
-	authOpenAIOrigin               = "https://auth.openai.com"
-	recoveryKind                   = "recovery"
+	defaultRecoveryBrowserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+	defaultRecoveryEmailServiceURL  = "https://postinbox.org/mailbox"
+	chatGPTSessionURL               = "https://chatgpt.com/api/auth/session"
+	chatGPTCSRFURL                  = "https://chatgpt.com/api/auth/csrf"
+	authOpenAIOrigin                = "https://auth.openai.com"
+	recoveryKind                    = "recovery"
 )
 
 var (
@@ -330,17 +335,127 @@ func extractSessionToken(authJSON map[string]any) string {
 	return ""
 }
 
+func recoveryBrowserUserAgent(configured string) string {
+	lower := strings.ToLower(configured)
+	if strings.Contains(lower, "chrome/") || strings.Contains(lower, "safari/") || strings.Contains(lower, "firefox/") {
+		return strings.TrimSpace(configured)
+	}
+	return defaultRecoveryBrowserUserAgent
+}
+
+func newOpenAIRecoveryHTTPClient(timeout time.Duration, jar http.CookieJar, stopRedirects bool) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if proxyURL := recoveryProxyURL(); proxyURL != "" {
+		if err := applyRecoveryProxy(transport, proxyURL); err != nil {
+			// Keep direct networking available; the request error will still expose
+			// upstream Cloudflare/proxy failures to the recovery result.
+			_ = err
+		}
+	}
+	client := &http.Client{
+		Timeout:   timeout,
+		Jar:       jar,
+		Transport: transport,
+	}
+	if stopRedirects {
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
+	}
+	return client
+}
+
+func recoveryProxyURL() string {
+	for _, key := range []string{
+		"CPA_CONTROL_CENTER_RECOVERY_PROXY_URL",
+		"ALL_PROXY",
+		"HTTPS_PROXY",
+		"HTTP_PROXY",
+		"all_proxy",
+		"https_proxy",
+		"http_proxy",
+	} {
+		value := strings.TrimSpace(os.Getenv(key))
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func applyRecoveryProxy(transport *http.Transport, rawProxy string) error {
+	proxyURL, err := url.Parse(rawProxy)
+	if err != nil {
+		return err
+	}
+	switch strings.ToLower(proxyURL.Scheme) {
+	case "socks5", "socks5h":
+		var auth *xproxy.Auth
+		if proxyURL.User != nil {
+			password, _ := proxyURL.User.Password()
+			auth = &xproxy.Auth{User: proxyURL.User.Username(), Password: password}
+		}
+		dialer, err := xproxy.SOCKS5("tcp", proxyURL.Host, auth, xproxy.Direct)
+		if err != nil {
+			return err
+		}
+		if contextDialer, ok := dialer.(xproxy.ContextDialer); ok {
+			transport.DialContext = contextDialer.DialContext
+		} else {
+			transport.DialContext = func(ctx context.Context, network string, address string) (net.Conn, error) {
+				type result struct {
+					conn net.Conn
+					err  error
+				}
+				ch := make(chan result, 1)
+				go func() {
+					conn, err := dialer.Dial(network, address)
+					ch <- result{conn: conn, err: err}
+				}()
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case result := <-ch:
+					return result.conn, result.err
+				}
+			}
+		}
+		return nil
+	case "http", "https":
+		transport.Proxy = http.ProxyURL(proxyURL)
+		return nil
+	default:
+		return fmt.Errorf("unsupported recovery proxy scheme %q", proxyURL.Scheme)
+	}
+}
+
+func isCloudflareChallenge(resp *http.Response, body []byte) bool {
+	if resp == nil {
+		return false
+	}
+	if strings.EqualFold(resp.Header.Get("cf-mitigated"), "challenge") {
+		return true
+	}
+	lower := strings.ToLower(string(body))
+	return strings.Contains(lower, "enable javascript and cookies to continue") ||
+		strings.Contains(lower, "just a moment") && strings.Contains(lower, "cloudflare")
+}
+
+func cloudflareChallengeError(target string, statusCode int) error {
+	return fmt.Errorf("%s HTTP %d: ChatGPT/OpenAI Cloudflare challenge blocked server-side recovery; configure CPA_CONTROL_CENTER_RECOVERY_PROXY_URL with a proxy that can pass chatgpt.com/auth.openai.com or recover the account from a browser-authenticated environment", target, statusCode)
+}
+
 func refreshChatGPTSession(ctx context.Context, sessionToken string, userAgent string) (map[string]any, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, chatGPTSessionURL, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", stringOr(userAgent, defaultUserAgent))
+	req.Header.Set("User-Agent", recoveryBrowserUserAgent(userAgent))
 	req.AddCookie(&http.Cookie{Name: "__Secure-next-auth.session-token", Value: sessionToken, Path: "/"})
 	req.AddCookie(&http.Cookie{Name: "next-auth.session-token", Value: sessionToken, Path: "/"})
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := newOpenAIRecoveryHTTPClient(30*time.Second, nil, false)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -351,6 +466,9 @@ func refreshChatGPTSession(ctx context.Context, sessionToken string, userAgent s
 		return nil, err
 	}
 	if resp.StatusCode >= 400 {
+		if isCloudflareChallenge(resp, data) {
+			return nil, cloudflareChallengeError("chatgpt session refresh", resp.StatusCode)
+		}
 		return nil, fmt.Errorf("chatgpt session refresh HTTP %d: %s", resp.StatusCode, normalizeText(string(data), 220))
 	}
 	var parsed map[string]any
@@ -878,12 +996,7 @@ func loginChatGPTWithPostInBox(ctx context.Context, email string, emailServiceUR
 
 func loginChatGPTWithEmailOTP(ctx context.Context, email string, userAgent string, fetchCode func() (string, error), onStatus func(string, string)) (map[string]any, error) {
 	jar, _ := cookiejar.New(nil)
-	client := &http.Client{
-		Jar: jar,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
+	client := newOpenAIRecoveryHTTPClient(120*time.Second, jar, true)
 	if onStatus != nil {
 		onStatus("csrf", "getting csrf token")
 	}
@@ -1191,6 +1304,9 @@ func doOpenAIJSON(ctx context.Context, client *http.Client, method string, endpo
 		return err
 	}
 	if resp.StatusCode >= 400 {
+		if isCloudflareChallenge(resp, data) {
+			return cloudflareChallengeError(endpoint, resp.StatusCode)
+		}
 		return fmt.Errorf("%s HTTP %d: %s", endpoint, resp.StatusCode, normalizeText(string(data), 260))
 	}
 	if len(data) == 0 {
@@ -1208,7 +1324,7 @@ func newOpenAIRequest(ctx context.Context, method string, endpoint string, body 
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("User-Agent", stringOr(userAgent, defaultUserAgent))
+	req.Header.Set("User-Agent", recoveryBrowserUserAgent(userAgent))
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 	if referer != "" {
 		req.Header.Set("Referer", referer)
