@@ -86,7 +86,10 @@ function formatQuotaTotal(bucket: QuotaBucketSummary) {
   if (!bucket.supported || typeof bucket.totalRemainingPercent !== 'number' || Number.isNaN(bucket.totalRemainingPercent)) {
     return t('quotas.unavailable')
   }
-  return t('recovery.stats.remainingPercent', { value: formatQuotaNumber(bucket.totalRemainingPercent) })
+  return t('recovery.stats.quotaPoolValue', {
+    remaining: formatQuotaNumber(bucket.totalRemainingPercent),
+    capacity: formatQuotaNumber(bucket.successCount * 100),
+  })
 }
 
 function formatQuotaHint(bucket: QuotaBucketSummary) {
@@ -97,8 +100,11 @@ function formatQuotaHint(bucket: QuotaBucketSummary) {
     return t('recovery.stats.quotaUnavailableHint')
   }
   const coverage = t('quotas.coverage', { success: bucket.successCount, total: bucket.successCount + bucket.failedCount })
+  const average = bucket.successCount > 0 && typeof bucket.totalRemainingPercent === 'number'
+    ? t('recovery.stats.averageRemaining', { value: formatQuotaNumber(bucket.totalRemainingPercent / bucket.successCount) })
+    : t('quotas.unavailable')
   const reset = bucket.resetAt ? formatDateTime(bucket.resetAt) : t('common.notAvailable')
-  return t('recovery.stats.quotaHint', { coverage, reset })
+  return t('recovery.stats.quotaHint', { average, coverage, reset })
 }
 
 function detectionSourceLabel(source: string) {

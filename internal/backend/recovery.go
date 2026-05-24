@@ -3,7 +3,9 @@ package backend
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +16,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
+	"os/exec"
 	"regexp"
 	"sort"
 	"strings"
@@ -28,6 +31,10 @@ const (
 	chatGPTSessionURL               = "https://chatgpt.com/api/auth/session"
 	chatGPTCSRFURL                  = "https://chatgpt.com/api/auth/csrf"
 	authOpenAIOrigin                = "https://auth.openai.com"
+	openAISentinelVersion           = "20260219f9f6"
+	openAISentinelSDKURL            = "https://sentinel.openai.com/sentinel/" + openAISentinelVersion + "/sdk.js"
+	openAISentinelReqURL            = "https://sentinel.openai.com/backend-api/sentinel/req"
+	openAISentinelReferer           = "https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=" + openAISentinelVersion
 	recoveryKind                    = "recovery"
 )
 
@@ -1219,13 +1226,21 @@ func loginChatGPTWithEmailOTP(ctx context.Context, email string, userAgent strin
 		return nil, errors.New("legacy OpenAI auth flow is not supported by the recovery worker")
 	}
 	if onStatus != nil {
+		onStatus("sentinel", "generating OpenAI sentinel token")
+	}
+	if token, err := getOpenAISentinelToken(ctx, client, &state, "authorize_continue", userAgent); err == nil {
+		state.sentinelToken = token
+	} else if onStatus != nil {
+		onStatus("sentinel_warning", err.Error())
+	}
+	if onStatus != nil {
 		onStatus("identifier", "submitting email")
 	}
-	firstStep, err := authorizeContinue(ctx, client, state.loginURL, email, userAgent)
+	firstStep, err := authorizeContinue(ctx, client, &state, email, userAgent)
 	if err != nil {
 		return nil, err
 	}
-	callbackURL, err := completeModernOpenAILogin(ctx, client, firstStep, fetchCode, userAgent, onStatus)
+	callbackURL, err := completeModernOpenAILogin(ctx, client, &state, firstStep, fetchCode, userAgent, onStatus)
 	if err != nil {
 		return nil, err
 	}
@@ -1254,9 +1269,11 @@ func loginChatGPTWithEmailOTP(ctx context.Context, email string, userAgent strin
 }
 
 type openAILoginState struct {
-	authURL  string
-	loginURL string
-	isModern bool
+	authURL       string
+	loginURL      string
+	deviceID      string
+	sentinelToken string
+	isModern      bool
 }
 
 func getChatGPTCSRF(ctx context.Context, client *http.Client, userAgent string) (string, error) {
@@ -1298,7 +1315,7 @@ func signinOpenAI(ctx context.Context, client *http.Client, csrf string, userAge
 }
 
 func followOpenAIAuthorize(ctx context.Context, client *http.Client, authURL string, userAgent string) (openAILoginState, error) {
-	state := openAILoginState{authURL: authURL, loginURL: authURL}
+	state := openAILoginState{authURL: authURL, loginURL: authURL, deviceID: extractOpenAIDeviceID(authURL)}
 	current := authURL
 	for i := 0; i < 10; i++ {
 		req, err := newOpenAIRequest(ctx, http.MethodGet, current, nil, userAgent, "https://chatgpt.com/")
@@ -1357,7 +1374,7 @@ func openAIWarmPage(ctx context.Context, client *http.Client, target string, use
 	return nil
 }
 
-func authorizeContinue(ctx context.Context, client *http.Client, loginURL string, email string, userAgent string) (map[string]any, error) {
+func authorizeContinue(ctx context.Context, client *http.Client, state *openAILoginState, email string, userAgent string) (map[string]any, error) {
 	payload := map[string]any{
 		"username": map[string]any{
 			"kind":  "email",
@@ -1365,11 +1382,16 @@ func authorizeContinue(ctx context.Context, client *http.Client, loginURL string
 		},
 	}
 	var parsed map[string]any
-	err := doOpenAIJSON(ctx, client, http.MethodPost, authOpenAIOrigin+"/api/accounts/authorize/continue", mustJSONReader(payload), userAgent, stringOr(loginURL, authOpenAIOrigin+"/log-in"), &parsed, "application/json")
+	headers := openAISentinelHeaders(state)
+	referer := authOpenAIOrigin + "/log-in"
+	if state != nil {
+		referer = stringOr(state.loginURL, referer)
+	}
+	err := doOpenAIJSONWithHeaders(ctx, client, http.MethodPost, authOpenAIOrigin+"/api/accounts/authorize/continue", mustJSONReader(payload), userAgent, referer, &parsed, headers, "application/json")
 	return parsed, err
 }
 
-func completeModernOpenAILogin(ctx context.Context, client *http.Client, step map[string]any, fetchCode func() (string, error), userAgent string, onStatus func(string, string)) (string, error) {
+func completeModernOpenAILogin(ctx context.Context, client *http.Client, state *openAILoginState, step map[string]any, fetchCode func() (string, error), userAgent string, onStatus func(string, string)) (string, error) {
 	continueURL := normalizeURL(extractContinueURL(step), authOpenAIOrigin)
 	pageType := strings.ToLower(strings.TrimSpace(stringValue(mapValue(step, "page.type"))))
 	if continueURL != "" && !needsModernOTP(pageType, continueURL) {
@@ -1383,7 +1405,15 @@ func completeModernOpenAILogin(ctx context.Context, client *http.Client, step ma
 		if onStatus != nil {
 			onStatus("send_code", "requesting another verification code")
 		}
-		_ = kickoffModernOTP(ctx, client, userAgent)
+		if onStatus != nil {
+			onStatus("sentinel", "generating email verification sentinel token")
+		}
+		if token, tokenErr := getOpenAISentinelToken(ctx, client, state, "email_verification", userAgent); tokenErr == nil && state != nil {
+			state.sentinelToken = token
+		} else if tokenErr != nil && onStatus != nil {
+			onStatus("sentinel_warning", tokenErr.Error())
+		}
+		_ = kickoffModernOTP(ctx, client, state, userAgent)
 		code, err = fetchCode()
 	}
 	if err != nil {
@@ -1395,9 +1425,14 @@ func completeModernOpenAILogin(ctx context.Context, client *http.Client, step ma
 	if onStatus != nil {
 		onStatus("verify_code", "submitting verification code")
 	}
+	if token, tokenErr := getOpenAISentinelToken(ctx, client, state, "email_verification", userAgent); tokenErr == nil && state != nil {
+		state.sentinelToken = token
+	} else if tokenErr != nil && onStatus != nil {
+		onStatus("sentinel_warning", tokenErr.Error())
+	}
 	payload := map[string]any{"code": code}
 	var parsed map[string]any
-	if err := doOpenAIJSON(ctx, client, http.MethodPost, authOpenAIOrigin+"/api/accounts/email-otp/validate", mustJSONReader(payload), userAgent, authOpenAIOrigin+"/email-verification", &parsed, "application/json"); err != nil {
+	if err := doOpenAIJSONWithHeaders(ctx, client, http.MethodPost, authOpenAIOrigin+"/api/accounts/email-otp/validate", mustJSONReader(payload), userAgent, authOpenAIOrigin+"/email-verification", &parsed, openAISentinelHeaders(state), "application/json"); err != nil {
 		return "", err
 	}
 	continueURL = normalizeURL(extractContinueURL(parsed), authOpenAIOrigin)
@@ -1407,7 +1442,7 @@ func completeModernOpenAILogin(ctx context.Context, client *http.Client, step ma
 	return continueURL, nil
 }
 
-func kickoffModernOTP(ctx context.Context, client *http.Client, userAgent string) error {
+func kickoffModernOTP(ctx context.Context, client *http.Client, state *openAILoginState, userAgent string) error {
 	endpoints := []struct {
 		Method string
 		URL    string
@@ -1426,6 +1461,9 @@ func kickoffModernOTP(ctx context.Context, client *http.Client, userAgent string
 		req.Header.Set("Accept", "application/json")
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Origin", authOpenAIOrigin)
+		for key, value := range openAISentinelHeaders(state) {
+			req.Header.Set(key, value)
+		}
 		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = err
@@ -1479,7 +1517,170 @@ func getChatGPTSession(ctx context.Context, client *http.Client, userAgent strin
 	return payload, nil
 }
 
+func getOpenAISentinelToken(ctx context.Context, client *http.Client, state *openAILoginState, flow string, userAgent string) (string, error) {
+	deviceID := ""
+	if state != nil {
+		deviceID = strings.TrimSpace(state.deviceID)
+		if deviceID == "" {
+			deviceID = extractOpenAIDeviceID(state.authURL)
+		}
+	}
+	if deviceID == "" {
+		deviceID = randomOpenAIDeviceID()
+	}
+	if state != nil {
+		state.deviceID = deviceID
+	}
+
+	sdkSource, err := fetchOpenAISentinelSDK(ctx, client, userAgent)
+	if err != nil {
+		return "", err
+	}
+	requirements, err := runOpenAISentinelHelper(ctx, map[string]any{
+		"action":     "requirements",
+		"sdkSource":  sdkSource,
+		"device_id":  deviceID,
+		"user_agent": recoveryBrowserUserAgent(userAgent),
+	})
+	if err != nil {
+		return "", err
+	}
+	requestP := strings.TrimSpace(stringValue(requirements["request_p"]))
+	if requestP == "" {
+		return "", errors.New("OpenAI sentinel requirements token is empty")
+	}
+
+	challenge, err := fetchOpenAISentinelChallenge(ctx, client, deviceID, flow, requestP, userAgent)
+	if err != nil {
+		return "", err
+	}
+	challengeToken := strings.TrimSpace(stringValue(challenge["token"]))
+	if challengeToken == "" {
+		return "", errors.New("OpenAI sentinel challenge token is empty")
+	}
+	solved, err := runOpenAISentinelHelper(ctx, map[string]any{
+		"action":     "solve",
+		"sdkSource":  sdkSource,
+		"device_id":  deviceID,
+		"user_agent": recoveryBrowserUserAgent(userAgent),
+		"request_p":  requestP,
+		"challenge":  challenge,
+	})
+	if err != nil {
+		return "", err
+	}
+	finalP := strings.TrimSpace(stringValue(solved["final_p"]))
+	tValue := strings.TrimSpace(stringValue(solved["t"]))
+	if finalP == "" || tValue == "" {
+		return "", errors.New("OpenAI sentinel helper returned an incomplete token")
+	}
+	tokenJSON, err := json.Marshal(map[string]any{
+		"p":    finalP,
+		"t":    tValue,
+		"c":    challengeToken,
+		"id":   deviceID,
+		"flow": flow,
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(tokenJSON), nil
+}
+
+func fetchOpenAISentinelSDK(ctx context.Context, client *http.Client, userAgent string) (string, error) {
+	req, err := newOpenAIRequest(ctx, http.MethodGet, openAISentinelSDKURL, nil, userAgent, authOpenAIOrigin+"/")
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "*/*")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode >= 400 {
+		if isCloudflareChallenge(resp, data) {
+			return "", cloudflareChallengeError(openAISentinelSDKURL, resp.StatusCode)
+		}
+		return "", fmt.Errorf("%s HTTP %d: %s", openAISentinelSDKURL, resp.StatusCode, normalizeText(string(data), 220))
+	}
+	return string(data), nil
+}
+
+func fetchOpenAISentinelChallenge(ctx context.Context, client *http.Client, deviceID string, flow string, requestP string, userAgent string) (map[string]any, error) {
+	payload := map[string]any{
+		"p":    requestP,
+		"id":   deviceID,
+		"flow": flow,
+	}
+	var parsed map[string]any
+	if err := doOpenAIJSONWithHeaders(ctx, client, http.MethodPost, openAISentinelReqURL, mustJSONReader(payload), userAgent, openAISentinelReferer, &parsed, map[string]string{
+		"Accept":         "*/*",
+		"Content-Type":   "text/plain;charset=UTF-8",
+		"Origin":         "https://sentinel.openai.com",
+		"Sec-Fetch-Dest": "empty",
+		"Sec-Fetch-Mode": "cors",
+		"Sec-Fetch-Site": "same-origin",
+	}, "text/plain;charset=UTF-8"); err != nil {
+		return nil, err
+	}
+	return parsed, nil
+}
+
+func runOpenAISentinelHelper(ctx context.Context, input map[string]any) (map[string]any, error) {
+	data, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	helperPath := strings.TrimSpace(os.Getenv("CPA_CONTROL_CENTER_SENTINEL_HELPER_PATH"))
+	if helperPath == "" {
+		helperPath = "/app/openai_sentinel_token.js"
+	}
+	cmd := exec.CommandContext(ctx, "node", helperPath)
+	cmd.Stdin = bytes.NewReader(data)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("OpenAI sentinel helper failed: %v: %s", err, normalizeText(string(output), 260))
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(output, &parsed); err != nil {
+		return nil, fmt.Errorf("OpenAI sentinel helper returned invalid JSON: %w", err)
+	}
+	return parsed, nil
+}
+
+func openAISentinelHeaders(state *openAILoginState) map[string]string {
+	if state == nil || strings.TrimSpace(state.sentinelToken) == "" {
+		return nil
+	}
+	return map[string]string{"openai-sentinel-token": state.sentinelToken}
+}
+
+func extractOpenAIDeviceID(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(parsed.Query().Get("device_id"))
+}
+
+func randomOpenAIDeviceID() string {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return fmt.Sprintf("%d", time.Now().UnixNano())
+	}
+	return hex.EncodeToString(buf[:])
+}
+
 func doOpenAIJSON(ctx context.Context, client *http.Client, method string, endpoint string, body io.Reader, userAgent string, referer string, target *map[string]any, contentTypes ...string) error {
+	return doOpenAIJSONWithHeaders(ctx, client, method, endpoint, body, userAgent, referer, target, nil, contentTypes...)
+}
+
+func doOpenAIJSONWithHeaders(ctx context.Context, client *http.Client, method string, endpoint string, body io.Reader, userAgent string, referer string, target *map[string]any, extraHeaders map[string]string, contentTypes ...string) error {
 	req, err := newOpenAIRequest(ctx, method, endpoint, body, userAgent, referer)
 	if err != nil {
 		return err
@@ -1490,6 +1691,11 @@ func doOpenAIJSON(ctx context.Context, client *http.Client, method string, endpo
 	}
 	if strings.Contains(endpoint, "auth.openai.com") {
 		req.Header.Set("Origin", authOpenAIOrigin)
+	}
+	for key, value := range extraHeaders {
+		if strings.TrimSpace(key) != "" && strings.TrimSpace(value) != "" {
+			req.Header.Set(key, value)
+		}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
