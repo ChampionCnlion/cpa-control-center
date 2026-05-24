@@ -31,6 +31,11 @@ const tasksStore = useTasksStore()
         <strong>{{ taskPhaseLabel(tasksStore.quota.phase) }}</strong>
         <small>{{ tasksStore.quota.message || t('common.idle') }}</small>
       </article>
+      <article class="stat-card">
+        <span class="stat-label">{{ t('logs.recoveryTask') }}</span>
+        <strong>{{ taskPhaseLabel(tasksStore.recovery.phase) }}</strong>
+        <small>{{ tasksStore.recovery.message || t('common.idle') }}</small>
+      </article>
     </section>
     <section class="panel panel--fill">
       <div class="panel-head">

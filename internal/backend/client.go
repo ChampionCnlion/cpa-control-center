@@ -399,6 +399,23 @@ func (c *Client) SetAccountDisabled(ctx context.Context, settings AppSettings, n
 	return result
 }
 
+func (c *Client) DownloadAuthFile(ctx context.Context, settings AppSettings, name string) (map[string]any, error) {
+	body, err := c.doManagedAccountRequest(ctx, settings, http.MethodGet, settings.BaseURL+"/v0/management/auth-files/download", name, false, true, func(candidate string) any {
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func (c *Client) UploadAuthFile(ctx context.Context, settings AppSettings, name string, authJSON map[string]any) error {
+	_, err := c.doManagedAccountRequest(ctx, settings, http.MethodPost, settings.BaseURL+"/v0/management/auth-files", name, false, true, func(candidate string) any {
+		return authJSON
+	})
+	return err
+}
+
 func (c *Client) doManagedAccountRequest(
 	ctx context.Context,
 	settings AppSettings,
@@ -413,7 +430,7 @@ func (c *Client) doManagedAccountRequest(
 	var lastErr error
 	for index, candidate := range candidates {
 		requestEndpoint := endpoint
-		if method == http.MethodDelete {
+		if method == http.MethodDelete || method == http.MethodGet || method == http.MethodPost {
 			requestEndpoint = endpoint + "?name=" + url.QueryEscape(candidate)
 		}
 		response, err := c.doRequest(ctx, settings, method, requestEndpoint, payloadForName(candidate))

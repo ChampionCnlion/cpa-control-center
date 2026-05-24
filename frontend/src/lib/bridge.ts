@@ -13,6 +13,9 @@ import type {
   LogEntry,
   MaintainResult,
   MaintainOptions,
+  Recovery401Options,
+  Recovery401Result,
+  Recovery401ScanResult,
   ScanDetailPage,
   ScanSummary,
   SchedulerStatus,
@@ -26,10 +29,12 @@ type EventPayloadMap = {
   'maintain:log': LogEntry
   'inventory:log': LogEntry
   'quota:log': LogEntry
+  'recovery:log': LogEntry
   'scan:progress': TaskProgress
   'maintain:progress': TaskProgress
   'inventory:progress': TaskProgress
   'quota:progress': TaskProgress
+  'recovery:progress': TaskProgress
   'quota:snapshot': CodexQuotaSnapshot
   'task:finished': TaskFinished
 }
@@ -310,6 +315,23 @@ export async function runMaintain(options: MaintainOptions) {
     return await callWails<MaintainResult>('RunMaintain', options)
   }
   return await httpRequest<MaintainResult>('/api/tasks/maintain', {
+    method: 'POST',
+    body: options,
+  })
+}
+
+export async function scan401Recovery() {
+  if (hasWailsBridge()) {
+    return await callWails<Recovery401ScanResult>('Scan401Recovery')
+  }
+  return await httpRequest<Recovery401ScanResult>('/api/recovery/401/scan', { method: 'POST' })
+}
+
+export async function run401Recovery(options: Recovery401Options) {
+  if (hasWailsBridge()) {
+    return await callWails<Recovery401Result>('Run401Recovery', options)
+  }
+  return await httpRequest<Recovery401Result>('/api/recovery/401/run', {
     method: 'POST',
     body: options,
   })

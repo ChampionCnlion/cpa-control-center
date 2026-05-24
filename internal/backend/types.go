@@ -210,6 +210,49 @@ type MaintainResult struct {
 	ReenableResults    []ActionResult `json:"reenableResults"`
 }
 
+type Recovery401Options struct {
+	MaxAccounts     int    `json:"maxAccounts"`
+	EmailServiceURL string `json:"emailServiceUrl"`
+}
+
+type Recovery401Candidate struct {
+	Name          string `json:"name"`
+	Email         string `json:"email"`
+	Provider      string `json:"provider"`
+	Status        string `json:"status"`
+	StatusMessage string `json:"statusMessage"`
+	Disabled      bool   `json:"disabled"`
+	Unavailable   bool   `json:"unavailable"`
+	RuntimeOnly   bool   `json:"runtimeOnly"`
+}
+
+type Recovery401ScanResult struct {
+	Total      int                    `json:"total"`
+	Candidates []Recovery401Candidate `json:"candidates"`
+}
+
+type Recovery401ItemResult struct {
+	Name    string `json:"name"`
+	Email   string `json:"email"`
+	Action  string `json:"action"`
+	OK      bool   `json:"ok"`
+	Message string `json:"message"`
+}
+
+type Recovery401Summary struct {
+	Total      int `json:"total"`
+	Candidates int `json:"candidates"`
+	Processed  int `json:"processed"`
+	Uploaded   int `json:"uploaded"`
+	Skipped    int `json:"skipped"`
+	Failed     int `json:"failed"`
+}
+
+type Recovery401Result struct {
+	Summary Recovery401Summary      `json:"summary"`
+	Results []Recovery401ItemResult `json:"results"`
+}
+
 type ActionResult struct {
 	Name       string `json:"name"`
 	OK         bool   `json:"ok"`

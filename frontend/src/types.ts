@@ -215,6 +215,49 @@ export interface MaintainOptions {
   autoReenable: boolean
 }
 
+export interface Recovery401Options {
+  maxAccounts: number
+  emailServiceUrl: string
+}
+
+export interface Recovery401Candidate {
+  name: string
+  email: string
+  provider: string
+  status: string
+  statusMessage: string
+  disabled: boolean
+  unavailable: boolean
+  runtimeOnly: boolean
+}
+
+export interface Recovery401ScanResult {
+  total: number
+  candidates: Recovery401Candidate[]
+}
+
+export interface Recovery401ItemResult {
+  name: string
+  email: string
+  action: string
+  ok: boolean
+  message: string
+}
+
+export interface Recovery401Summary {
+  total: number
+  candidates: number
+  processed: number
+  uploaded: number
+  skipped: number
+  failed: number
+}
+
+export interface Recovery401Result {
+  summary: Recovery401Summary
+  results: Recovery401ItemResult[]
+}
+
 export interface ActionResult {
   name: string
   ok: boolean
@@ -286,7 +329,7 @@ export interface MaintainResult {
 }
 
 export interface TaskProgress {
-  kind: 'scan' | 'maintain' | 'inventory' | 'quota'
+  kind: 'scan' | 'maintain' | 'inventory' | 'quota' | 'recovery'
   phase: string
   current: number
   total: number
@@ -295,14 +338,14 @@ export interface TaskProgress {
 }
 
 export interface TaskFinished {
-  kind: 'scan' | 'maintain' | 'inventory' | 'quota'
+  kind: 'scan' | 'maintain' | 'inventory' | 'quota' | 'recovery'
   status: string
   message: string
 }
 
 export interface LogEntry {
   id?: string
-  kind: 'scan' | 'maintain' | 'inventory' | 'quota'
+  kind: 'scan' | 'maintain' | 'inventory' | 'quota' | 'recovery'
   level: string
   message: string
   timestamp: string
@@ -315,4 +358,4 @@ export interface AccountUpdate {
   record: AccountRecord
 }
 
-export type ViewKey = 'dashboard' | 'accounts' | 'quotas' | 'logs' | 'settings'
+export type ViewKey = 'dashboard' | 'accounts' | 'quotas' | 'recovery' | 'logs' | 'settings'

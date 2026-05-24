@@ -173,6 +173,22 @@ func (a *App) RunMaintain(options backend.MaintainOptions) (backend.MaintainResu
 	return service.RunMaintain(options)
 }
 
+func (a *App) Scan401Recovery() (backend.Recovery401ScanResult, error) {
+	service, err := a.ensureBackend()
+	if err != nil {
+		return backend.Recovery401ScanResult{}, err
+	}
+	return service.Scan401Recovery()
+}
+
+func (a *App) Run401Recovery(options backend.Recovery401Options) (backend.Recovery401Result, error) {
+	service, err := a.ensureBackend()
+	if err != nil {
+		return backend.Recovery401Result{}, err
+	}
+	return service.Run401Recovery(options)
+}
+
 func (a *App) ProbeAccount(name string) (backend.AccountRecord, error) {
 	service, err := a.ensureBackend()
 	if err != nil {

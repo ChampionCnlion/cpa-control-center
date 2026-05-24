@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { i18n } from '@/i18n'
-import { cancelCurrentTask, getRecentLogs, onEvent, runMaintain, runScan } from '@/lib/bridge'
-import type { CodexQuotaSnapshot, LogEntry, MaintainOptions, TaskFinished, TaskProgress } from '@/types'
+import { cancelCurrentTask, getRecentLogs, onEvent, run401Recovery, runMaintain, runScan } from '@/lib/bridge'
+import type { CodexQuotaSnapshot, LogEntry, MaintainOptions, Recovery401Options, TaskFinished, TaskProgress } from '@/types'
 import { toErrorMessage } from '@/utils/errors'
 import { useAccountsStore } from '@/stores/accounts'
 import { useQuotasStore } from '@/stores/quotas'
@@ -22,6 +22,7 @@ interface TasksState {
   maintain: TaskTracker
   inventory: TaskTracker
   quota: TaskTracker
+  recovery: TaskTracker
   inventoryQueued: boolean
   logs: LogEntry[]
   initialised: boolean
@@ -37,7 +38,9 @@ function emptyTracker(): TaskTracker {
   }
 }
 
-function progressEntryId(kind: 'scan' | 'maintain' | 'inventory' | 'quota'): string {
+type TaskKind = 'scan' | 'maintain' | 'inventory' | 'quota' | 'recovery'
+
+function progressEntryId(kind: TaskKind): string {
   return `${kind}:progress`
 }
 
@@ -55,12 +58,13 @@ export const useTasksStore = defineStore('tasksStore', {
     maintain: emptyTracker(),
     inventory: emptyTracker(),
     quota: emptyTracker(),
+    recovery: emptyTracker(),
     inventoryQueued: false,
     logs: [],
     initialised: false,
   }),
   getters: {
-    hasActiveTask: (state) => state.scan.active || state.maintain.active || state.inventory.active || state.quota.active,
+    hasActiveTask: (state) => state.scan.active || state.maintain.active || state.inventory.active || state.quota.active || state.recovery.active,
   },
   actions: {
     initEventBridge() {
@@ -73,6 +77,7 @@ export const useTasksStore = defineStore('tasksStore', {
         onEvent('maintain:log', (entry: LogEntry) => this.pushLog(entry)),
         onEvent('inventory:log', (entry: LogEntry) => this.pushLog(entry)),
         onEvent('quota:log', (entry: LogEntry) => this.pushLog(entry)),
+        onEvent('recovery:log', (entry: LogEntry) => this.pushLog(entry)),
         onEvent('scan:progress', (payload: TaskProgress) => {
           const message = progressMessage(payload)
           this.scan = {
@@ -117,6 +122,17 @@ export const useTasksStore = defineStore('tasksStore', {
           }
           this.upsertProgressLog('quota', payload, message)
         }),
+        onEvent('recovery:progress', (payload: TaskProgress) => {
+          const message = progressMessage(payload)
+          this.recovery = {
+            active: !payload.done,
+            phase: payload.phase,
+            current: payload.current,
+            total: payload.total,
+            message,
+          }
+          this.upsertProgressLog('recovery', payload, message)
+        }),
         onEvent('quota:snapshot', (snapshot: CodexQuotaSnapshot) => {
           useQuotasStore().applySnapshot(snapshot)
         }),
@@ -129,11 +145,13 @@ export const useTasksStore = defineStore('tasksStore', {
             this.inventory.active = false
           } else if (payload.kind === 'quota') {
             this.quota.active = false
+          } else if (payload.kind === 'recovery') {
+            this.recovery.active = false
           }
           if (payload.kind !== 'quota') {
             void useAccountsStore().refreshAll()
           }
-          if (this.inventoryQueued && !this.scan.active && !this.maintain.active && !this.inventory.active && !this.quota.active) {
+          if (this.inventoryQueued && !this.scan.active && !this.maintain.active && !this.inventory.active && !this.quota.active && !this.recovery.active) {
             this.inventoryQueued = false
             void this.runInventory().catch(() => {})
           }
@@ -168,7 +186,7 @@ export const useTasksStore = defineStore('tasksStore', {
       this.logs.unshift(entry)
       this.logs = this.logs.slice(0, 500)
     },
-    upsertProgressLog(kind: 'scan' | 'maintain' | 'inventory' | 'quota', payload: TaskProgress, message: string) {
+    upsertProgressLog(kind: TaskKind, payload: TaskProgress, message: string) {
       this.pushLog({
         id: progressEntryId(kind),
         kind,
@@ -214,8 +232,26 @@ export const useTasksStore = defineStore('tasksStore', {
         this.maintain.active = false
       }
     },
+    async run401Recovery(options: Recovery401Options) {
+      const message = i18n.global.t('tasks.queuedRecovery')
+      this.recovery = { ...emptyTracker(), active: true, phase: 'queued', message }
+      this.upsertProgressLog('recovery', { kind: 'recovery', phase: 'queued', current: 0, total: 0, message, done: false }, message)
+      try {
+        return await run401Recovery(options)
+      } catch (error) {
+        this.pushLog({
+          kind: 'recovery',
+          level: 'error',
+          message: toErrorMessage(error),
+          timestamp: new Date().toISOString(),
+        })
+        throw error
+      } finally {
+        this.recovery.active = false
+      }
+    },
     scheduleInventorySync() {
-      if (this.scan.active || this.maintain.active || this.inventory.active || this.quota.active) {
+      if (this.scan.active || this.maintain.active || this.inventory.active || this.quota.active || this.recovery.active) {
         this.inventoryQueued = true
         return 'queued' as const
       }

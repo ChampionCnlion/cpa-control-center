@@ -258,6 +258,31 @@ select {
     inset 0 1px 0 rgba(255, 255, 255, 0.75);
 }
 
+.dashboard-grid--recovery {
+  grid-template-columns: minmax(320px, 0.8fr) minmax(0, 1.2fr);
+}
+
+.recovery-options {
+  display: grid;
+  gap: 16px;
+}
+
+.form-row {
+  display: grid;
+  gap: 8px;
+  color: var(--ink-soft);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.form-row--wide {
+  min-width: 0;
+}
+
+.recovery-results {
+  min-height: 360px;
+}
+
 .el-textarea__inner:focus {
   border-color: rgba(24, 95, 74, 0.24);
   box-shadow:

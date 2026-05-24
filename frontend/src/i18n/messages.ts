@@ -12,6 +12,8 @@ export const messages = {
       accountsCaption: 'Live account table',
       quotas: 'Codex Quotas',
       quotasCaption: 'Plan quota snapshot',
+      recovery: '401 Recovery',
+      recoveryCaption: 'Manual re-login repair',
       logs: 'Logs',
       logsCaption: 'Task stream',
       settings: 'Settings',
@@ -59,6 +61,7 @@ export const messages = {
       queuedScan: 'Starting scan...',
       queuedMaintain: 'Starting maintenance...',
       queuedInventory: 'Starting inventory sync...',
+      queuedRecovery: 'Starting 401 recovery...',
       phases: {
         idle: 'Idle',
         queued: 'Queued',
@@ -69,6 +72,7 @@ export const messages = {
         delete401: 'Delete 401',
         quota: 'Quota Action',
         reenable: 'Re-enable',
+        repair: 'Repair',
         complete: 'Complete',
       },
       statuses: {
@@ -89,6 +93,7 @@ export const messages = {
       maintainTask: 'Maintain Task',
       inventoryTask: 'Inventory Sync',
       quotaTask: 'Quota Refresh',
+      recoveryTask: '401 Recovery',
       taskStream: 'Task Stream',
       runtimeEvents: 'Runtime events',
       kind: {
@@ -96,6 +101,7 @@ export const messages = {
         maintain: 'Maintain',
         inventory: 'Inventory',
         quota: 'Quota Refresh',
+        recovery: '401 Recovery',
       },
       level: {
         info: 'Info',
@@ -155,6 +161,60 @@ export const messages = {
         quotaSample: 'Quota sample: {names}',
       },
     },
+    recovery: {
+      eyebrow: 'Account Recovery',
+      title: 'Repair 401 Codex auth files only when you click run.',
+      lead: 'The worker scans CPA 401 credentials, refreshes valid ChatGPT session tokens first, then falls back to PostInBox email OTP re-login and uploads the repaired CPA JSON.',
+      actions: {
+        scan: 'Scan 401',
+        run: 'Run 401 Recovery',
+      },
+      stats: {
+        current401: 'Current Snapshot 401',
+        current401Hint: 'From the latest local scan',
+        scanned: 'Remote Auth Files',
+        scannedHint: 'Loaded only after Scan 401',
+        candidates: '401 Candidates',
+        candidatesHint: 'Detected from CPA status fields',
+        uploaded: 'Uploaded',
+        uploadedHint: 'Repaired auth files',
+      },
+      options: {
+        kicker: 'Execution Options',
+        title: 'Click-controlled recovery',
+        maxAccounts: 'Max accounts per run',
+        emailServiceUrl: 'PostInBox mailbox URL',
+        hint: 'No recovery work runs on page open. The run button may contact ChatGPT, OpenAI Auth, PostInBox, and the saved CPA management API.',
+      },
+      candidates: {
+        kicker: 'Scan Preview',
+        title: 'Detected 401 credentials',
+        count: '{count} candidates',
+      },
+      results: {
+        kicker: 'Run Results',
+        title: 'Recovery outcome',
+        summary: '{processed} processed · {uploaded} uploaded · {failed} failed',
+      },
+      columns: {
+        name: 'Name',
+        email: 'Email',
+        provider: 'Provider',
+        status: 'Status',
+        action: 'Action',
+        message: 'Message',
+      },
+      dialog: {
+        title: 'Run 401 recovery?',
+        message: 'The worker will process up to {count} 401 credentials and may overwrite CPA auth files when recovery succeeds.',
+        confirm: 'Run Recovery',
+        cancel: 'Cancel',
+      },
+      messages: {
+        scanCompleted: 'Found {count} 401 candidates.',
+        runCompleted: 'Recovery completed: {uploaded} uploaded, {failed} failed.',
+      },
+    },
     quotas: {
       eyebrow: 'Codex Quotas',
       title: 'Live Codex quota points by plan.',
@@ -209,7 +269,7 @@ export const messages = {
         },
         sorts: {
           plan: 'Plan',
-          total: 'Total remaining',
+          total: 'Effective remaining',
           fiveHour: '5-hour remaining',
           weekly: 'Weekly remaining',
           reset: 'Earliest reset',
@@ -265,7 +325,7 @@ export const messages = {
         unsupported: 'Unsupported',
         success: 'Success',
         failed: 'Failed',
-        totalRemaining: 'Total remaining {value}%',
+        totalRemaining: 'Effective remaining',
       },
       recovery: {
         title: 'Recovery Board',
@@ -489,6 +549,8 @@ export const messages = {
       accountsCaption: '实时账号表',
       quotas: 'Codex 额度',
       quotasCaption: '套餐额度快照',
+      recovery: '401 恢复',
+      recoveryCaption: '手动重登修复',
       logs: '任务日志',
       logsCaption: '任务流',
       settings: '设置',
@@ -536,6 +598,7 @@ export const messages = {
       queuedScan: '正在启动扫描...',
       queuedMaintain: '正在启动维护...',
       queuedInventory: '正在启动库存同步...',
+      queuedRecovery: '正在启动 401 恢复...',
       phases: {
         idle: '空闲',
         queued: '排队中',
@@ -546,6 +609,7 @@ export const messages = {
         delete401: '删除 401',
         quota: '处理限额',
         reenable: '恢复启用',
+        repair: '修复',
         complete: '完成',
       },
       statuses: {
@@ -566,6 +630,7 @@ export const messages = {
       maintainTask: '维护任务',
       inventoryTask: '库存同步',
       quotaTask: '额度刷新',
+      recoveryTask: '401 恢复',
       taskStream: '任务流',
       runtimeEvents: '运行时事件',
       kind: {
@@ -573,6 +638,7 @@ export const messages = {
         maintain: '维护',
         inventory: '库存同步',
         quota: '额度刷新',
+        recovery: '401 恢复',
       },
       level: {
         info: '信息',
@@ -632,6 +698,60 @@ export const messages = {
         quotaSample: '限额示例：{names}',
       },
     },
+    recovery: {
+      eyebrow: '账号恢复',
+      title: '只在点击按钮后修复 401 Codex 凭证。',
+      lead: '任务会扫描 CPA 中的 401 凭证，优先刷新仍可用的 ChatGPT session token，失败后再通过 PostInBox 邮箱 OTP 重新登录，并上传修复后的 CPA JSON。',
+      actions: {
+        scan: '扫描 401',
+        run: '执行 401 恢复',
+      },
+      stats: {
+        current401: '当前快照 401',
+        current401Hint: '来自最近一次本地扫描',
+        scanned: '远端 Auth 文件',
+        scannedHint: '点击扫描后才会加载',
+        candidates: '401 候选',
+        candidatesHint: '根据 CPA 状态字段识别',
+        uploaded: '已上传',
+        uploadedHint: '已修复凭证',
+      },
+      options: {
+        kicker: '执行选项',
+        title: '点击触发的恢复任务',
+        maxAccounts: '单次最多处理',
+        emailServiceUrl: 'PostInBox 邮箱地址',
+        hint: '打开页面不会自动执行恢复。点击执行后可能访问 ChatGPT、OpenAI Auth、PostInBox 和已保存的 CPA 管理接口。',
+      },
+      candidates: {
+        kicker: '扫描预览',
+        title: '检测到的 401 凭证',
+        count: '{count} 个候选',
+      },
+      results: {
+        kicker: '执行结果',
+        title: '恢复结果',
+        summary: '已处理 {processed} · 已上传 {uploaded} · 失败 {failed}',
+      },
+      columns: {
+        name: '名称',
+        email: '邮箱',
+        provider: '提供方',
+        status: '状态',
+        action: '动作',
+        message: '消息',
+      },
+      dialog: {
+        title: '执行 401 恢复？',
+        message: '任务最多处理 {count} 个 401 凭证；恢复成功时会覆盖上传 CPA auth 文件。',
+        confirm: '执行恢复',
+        cancel: '取消',
+      },
+      messages: {
+        scanCompleted: '找到 {count} 个 401 候选。',
+        runCompleted: '恢复完成：已上传 {uploaded} 个，失败 {failed} 个。',
+      },
+    },
     quotas: {
       eyebrow: 'Codex 额度',
       title: '按套餐查看 Codex 额度点数。',
@@ -686,7 +806,7 @@ export const messages = {
         },
         sorts: {
           plan: '按套餐',
-          total: '按综合剩余额度',
+          total: '按有效剩余额度',
           fiveHour: '按 5 小时剩余额度',
           weekly: '按周剩余额度',
           reset: '按最早重置时间',
@@ -742,7 +862,7 @@ export const messages = {
         unsupported: '不支持',
         success: '成功',
         failed: '失败',
-        totalRemaining: '综合剩余 {value}%',
+        totalRemaining: '有效剩余',
       },
       recovery: {
         title: '恢复时间',

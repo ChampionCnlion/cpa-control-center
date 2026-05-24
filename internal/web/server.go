@@ -153,6 +153,8 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("POST /api/tasks/scan", s.handleRunScan)
 	protected.HandleFunc("POST /api/tasks/cancel", s.handleCancelTask)
 	protected.HandleFunc("POST /api/tasks/maintain", s.handleRunMaintain)
+	protected.HandleFunc("POST /api/recovery/401/scan", s.handleScan401Recovery)
+	protected.HandleFunc("POST /api/recovery/401/run", s.handleRun401Recovery)
 	protected.HandleFunc("GET /api/quotas", s.handleGetQuotas)
 	protected.HandleFunc("POST /api/accounts/{name}/probe", s.handleProbeAccount)
 	protected.HandleFunc("POST /api/accounts/bulk/probe", s.handleProbeAccounts)
@@ -359,6 +361,29 @@ func (s *Server) handleRunMaintain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := s.service.RunMaintain(input)
+	if err != nil {
+		writeError(w, statusFromTaskError(err), err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleScan401Recovery(w http.ResponseWriter, _ *http.Request) {
+	result, err := s.service.Scan401Recovery()
+	if err != nil {
+		writeError(w, statusFromTaskError(err), err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleRun401Recovery(w http.ResponseWriter, r *http.Request) {
+	var input backend.Recovery401Options
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := s.service.Run401Recovery(input)
 	if err != nil {
 		writeError(w, statusFromTaskError(err), err)
 		return
