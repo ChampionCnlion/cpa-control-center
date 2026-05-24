@@ -66,3 +66,79 @@ func TestRecovery401CandidateFilterRequiresAuthFailureSignal(t *testing.T) {
 		})
 	}
 }
+
+func TestRecovery401CandidateDetectionPrefersLiveProbe(t *testing.T) {
+	t.Parallel()
+
+	auth401 := map[string]any{
+		"name":           "stale-401.codex.json",
+		"status":         "error",
+		"status_message": "upstream HTTP 401 unauthorized",
+	}
+
+	tests := []struct {
+		name       string
+		file       map[string]any
+		probe      UsageProbeResult
+		wantSource string
+		wantOK     bool
+	}{
+		{
+			name: "live 401 is candidate",
+			file: map[string]any{"name": "live-401.codex.json", "status": "ok"},
+			probe: UsageProbeResult{Record: AccountRecord{
+				Name:          "live-401.codex.json",
+				StateKey:      stateInvalid401,
+				APIStatusCode: intPtr(401),
+			}},
+			wantSource: "usage_probe",
+			wantOK:     true,
+		},
+		{
+			name: "live quota limited excludes stale auth 401",
+			file: auth401,
+			probe: UsageProbeResult{Record: AccountRecord{
+				Name:           "stale-401.codex.json",
+				StateKey:       stateQuotaLimited,
+				APIStatusCode:  intPtr(401),
+				ProbeErrorKind: "usage_limit_reached",
+			}},
+			wantOK: false,
+		},
+		{
+			name: "live normal excludes stale auth 401",
+			file: auth401,
+			probe: UsageProbeResult{Record: AccountRecord{
+				Name:          "stale-401.codex.json",
+				StateKey:      stateNormal,
+				APIStatusCode: intPtr(200),
+			}},
+			wantOK: false,
+		},
+		{
+			name: "auth status is fallback when live probe is inconclusive",
+			file: auth401,
+			probe: UsageProbeResult{Record: AccountRecord{
+				Name:           "stale-401.codex.json",
+				StateKey:       stateError,
+				ProbeErrorKind: "missing_chatgpt_account_id",
+			}},
+			wantSource: "auth_status",
+			wantOK:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			source, ok := recovery401CandidateDetectionSource(tt.file, tt.probe)
+			if ok != tt.wantOK {
+				t.Fatalf("recovery401CandidateDetectionSource() ok = %v, want %v", ok, tt.wantOK)
+			}
+			if source != tt.wantSource {
+				t.Fatalf("recovery401CandidateDetectionSource() source = %q, want %q", source, tt.wantSource)
+			}
+		})
+	}
+}

@@ -48,11 +48,41 @@ func (b *Backend) Scan401Recovery() (Recovery401ScanResult, error) {
 		return Recovery401ScanResult{}, err
 	}
 
-	files, err := b.client.FetchAuthFiles(context.Background(), settings)
+	ctx, err := b.beginTask(recoveryKind, settings.Locale)
 	if err != nil {
 		return Recovery401ScanResult{}, err
 	}
-	return buildRecovery401ScanResult(files), nil
+	defer b.endTask()
+
+	status := "success"
+	finishMessage := "401 scan completed"
+	defer func() {
+		b.emitTaskFinished(recoveryKind, status, finishMessage)
+	}()
+
+	b.emitLog(recoveryKind, "info", "Starting probe-based 401 recovery scan")
+	b.emitProgress(recoveryKind, "fetch", 0, 1, "Loading CPA auth inventory", false)
+	files, err := b.client.FetchAuthFiles(ctx, settings)
+	if err != nil {
+		status = taskStatus(err)
+		finishMessage = err.Error()
+		b.emitLog(recoveryKind, "error", finishMessage)
+		b.emitProgress(recoveryKind, "fetch", 0, 1, finishMessage, true)
+		return Recovery401ScanResult{}, err
+	}
+	b.emitProgress(recoveryKind, "fetch", 1, 1, fmt.Sprintf("Loaded %d auth records", len(files)), true)
+
+	result, _, err := b.buildRecovery401ProbeScanResult(ctx, settings, files)
+	if err != nil {
+		status = taskStatus(err)
+		finishMessage = err.Error()
+		b.emitLog(recoveryKind, "warning", finishMessage)
+		return Recovery401ScanResult{}, err
+	}
+	finishMessage = fmt.Sprintf("401 scan completed: %d candidates from %d probed accounts", len(result.Candidates), result.Probed)
+	b.emitLog(recoveryKind, "info", finishMessage)
+	b.emitProgress(recoveryKind, "complete", result.Probed, result.Probed, finishMessage, true)
+	return result, nil
 }
 
 func (b *Backend) Run401Recovery(options Recovery401Options) (Recovery401Result, error) {
@@ -88,7 +118,13 @@ func (b *Backend) Run401Recovery(options Recovery401Options) (Recovery401Result,
 	}
 	b.emitProgress(recoveryKind, "fetch", 1, 1, fmt.Sprintf("Loaded %d auth records", len(files)), true)
 
-	candidates := filterRecovery401Candidates(files)
+	scanResult, candidates, err := b.buildRecovery401ProbeScanResult(ctx, settings, files)
+	if err != nil {
+		status = taskStatus(err)
+		finishMessage = err.Error()
+		b.emitLog(recoveryKind, "warning", finishMessage)
+		return Recovery401Result{}, err
+	}
 	limit := options.MaxAccounts
 	if limit <= 0 || limit > len(candidates) {
 		limit = len(candidates)
@@ -97,12 +133,12 @@ func (b *Backend) Run401Recovery(options Recovery401Options) (Recovery401Result,
 
 	result := Recovery401Result{
 		Summary: Recovery401Summary{
-			Total:      len(files),
+			Total:      scanResult.Total,
 			Candidates: len(candidates),
 		},
 		Results: make([]Recovery401ItemResult, 0, len(selected)),
 	}
-	b.emitLog(recoveryKind, "info", fmt.Sprintf("Prepared %d 401 candidates from %d auth records", len(candidates), len(files)))
+	b.emitLog(recoveryKind, "info", fmt.Sprintf("Prepared %d 401 candidates from %d auth records after probing %d accounts", len(candidates), scanResult.Total, scanResult.Probed))
 	if len(selected) == 0 {
 		finishMessage = "No 401 candidates found"
 		b.emitProgress(recoveryKind, "complete", 0, 0, finishMessage, true)
@@ -221,22 +257,183 @@ func (b *Backend) recoverOne401Credential(ctx context.Context, settings AppSetti
 	return Recovery401ItemResult{Name: name, Email: email, Action: "uploaded", OK: true, Message: "re-login succeeded and CPA auth file uploaded"}
 }
 
+func (b *Backend) buildRecovery401ProbeScanResult(ctx context.Context, settings AppSettings, files []map[string]any) (Recovery401ScanResult, []map[string]any, error) {
+	records, probeRecords, filesByName, err := b.buildRecovery401ProbeRecords(settings, files)
+	if err != nil {
+		return Recovery401ScanResult{}, nil, err
+	}
+
+	probes, err := b.probeAccounts(ctx, recoveryKind, settings, probeRecords)
+	if err != nil {
+		return Recovery401ScanResult{}, nil, err
+	}
+
+	if len(probes) > 0 {
+		recordsByName := make(map[string]AccountRecord, len(probes))
+		for _, probe := range probes {
+			recordsByName[probe.Record.Name] = probe.Record
+		}
+		for index, record := range records {
+			if probed, ok := recordsByName[record.Name]; ok {
+				records[index] = probed
+			}
+		}
+	}
+
+	if err := b.store.ReplaceCurrentAccounts(records); err != nil {
+		return Recovery401ScanResult{}, nil, err
+	}
+
+	var quotaSnapshot *CodexQuotaSnapshot
+	snapshot, ok, err := b.buildCodexQuotaSnapshotFromUsageProbes(settings, records, probes, nowISO(), recoveryKind)
+	if err != nil {
+		return Recovery401ScanResult{}, nil, err
+	}
+	if ok {
+		if err := b.persistCodexQuotaSnapshot(snapshot); err != nil {
+			return Recovery401ScanResult{}, nil, err
+		}
+		quotaSnapshot = &snapshot
+	}
+
+	candidates := make([]recovery401CandidateItem, 0)
+	for _, probe := range probes {
+		file, ok := filesByName[probe.Record.Name]
+		if !ok {
+			continue
+		}
+		source, ok := recovery401CandidateDetectionSource(file, probe)
+		if !ok {
+			continue
+		}
+		candidates = append(candidates, recovery401CandidateItem{
+			file:      file,
+			candidate: buildRecovery401Candidate(file, probe.Record, source),
+		})
+	}
+	sort.SliceStable(candidates, func(i int, j int) bool {
+		return candidates[i].candidate.Name < candidates[j].candidate.Name
+	})
+
+	result := Recovery401ScanResult{
+		Total:      len(files),
+		Probed:     len(probes),
+		Quota:      quotaSnapshot,
+		Candidates: make([]Recovery401Candidate, 0, len(candidates)),
+	}
+	candidateFiles := make([]map[string]any, 0, len(candidates))
+	for _, item := range candidates {
+		result.Candidates = append(result.Candidates, item.candidate)
+		candidateFiles = append(candidateFiles, item.file)
+	}
+
+	return result, candidateFiles, nil
+}
+
+type recovery401CandidateItem struct {
+	file      map[string]any
+	candidate Recovery401Candidate
+}
+
+func (b *Backend) buildRecovery401ProbeRecords(settings AppSettings, files []map[string]any) ([]AccountRecord, []AccountRecord, map[string]map[string]any, error) {
+	existing, err := b.store.LoadCurrentMap()
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	timestamp := nowISO()
+	records := make([]AccountRecord, 0, len(files))
+	recordIndexes := make(map[string]int, len(files))
+	filesByName := make(map[string]map[string]any, len(files))
+
+	for _, item := range files {
+		name := strings.TrimSpace(stringValue(item["name"]))
+		if name == "" {
+			continue
+		}
+
+		var previous *AccountRecord
+		if current, ok := existing[name]; ok {
+			currentCopy := current
+			previous = &currentCopy
+		}
+		record := b.client.BuildAccountRecord(item, previous, timestamp)
+		record = carryInventorySnapshot(record, previous)
+		if record.Name == "" {
+			continue
+		}
+		filesByName[record.Name] = item
+		if index, ok := recordIndexes[record.Name]; ok {
+			records[index] = record
+			continue
+		}
+		recordIndexes[record.Name] = len(records)
+		records = append(records, record)
+	}
+
+	probeRecords := make([]AccountRecord, 0, len(records))
+	for _, record := range records {
+		if matchesInventoryFilter(record, settings) {
+			probeRecords = append(probeRecords, record)
+		}
+	}
+
+	return records, probeRecords, filesByName, nil
+}
+
 func buildRecovery401ScanResult(files []map[string]any) Recovery401ScanResult {
 	candidates := filterRecovery401Candidates(files)
 	items := make([]Recovery401Candidate, 0, len(candidates))
 	for _, file := range candidates {
-		items = append(items, Recovery401Candidate{
+		items = append(items, buildRecovery401Candidate(file, AccountRecord{
 			Name:          strings.TrimSpace(stringValue(file["name"])),
 			Email:         strings.TrimSpace(stringValue(file["email"])),
 			Provider:      strings.TrimSpace(stringValue(file["provider"])),
 			Status:        strings.TrimSpace(stringValue(file["status"])),
 			StatusMessage: strings.TrimSpace(stringValue(file["status_message"])),
+			StateKey:      stateInvalid401,
 			Disabled:      boolValueFromAny(file["disabled"]),
 			Unavailable:   boolValueFromAny(file["unavailable"]),
 			RuntimeOnly:   boolValueFromAny(file["runtime_only"]),
-		})
+		}, "auth_status"))
 	}
 	return Recovery401ScanResult{Total: len(files), Candidates: items}
+}
+
+func recovery401CandidateDetectionSource(file map[string]any, probe UsageProbeResult) (string, bool) {
+	state := normalizeStateKey(probe.Record.StateKey)
+	switch state {
+	case stateInvalid401:
+		return "usage_probe", true
+	case stateNormal, stateQuotaLimited, stateRecovered:
+		return "", false
+	}
+	if intValue(probe.Record.APIStatusCode) == http.StatusUnauthorized && probe.Record.ProbeErrorKind != "usage_limit_reached" {
+		return "usage_probe", true
+	}
+	if isRecovery401AuthFile(file) {
+		return "auth_status", true
+	}
+	return "", false
+}
+
+func buildRecovery401Candidate(file map[string]any, record AccountRecord, source string) Recovery401Candidate {
+	return Recovery401Candidate{
+		Name:            strings.TrimSpace(stringOr(record.Name, stringValue(file["name"]))),
+		Email:           strings.TrimSpace(stringOr(record.Email, stringValue(file["email"]))),
+		Provider:        strings.TrimSpace(stringOr(record.Provider, stringValue(file["provider"]))),
+		PlanType:        strings.TrimSpace(record.PlanType),
+		Status:          strings.TrimSpace(stringOr(record.Status, stringValue(file["status"]))),
+		StatusMessage:   strings.TrimSpace(stringOr(record.StatusMessage, stringValue(file["status_message"]))),
+		StateKey:        normalizeStateKey(record.StateKey),
+		DetectionSource: source,
+		APIStatusCode:   record.APIStatusCode,
+		ProbeErrorKind:  strings.TrimSpace(record.ProbeErrorKind),
+		ProbeErrorText:  strings.TrimSpace(record.ProbeErrorText),
+		Disabled:        record.Disabled || boolValueFromAny(file["disabled"]),
+		Unavailable:     record.Unavailable || boolValueFromAny(file["unavailable"]),
+		RuntimeOnly:     record.RuntimeOnly || boolValueFromAny(file["runtime_only"]),
+	}
 }
 
 func filterRecovery401Candidates(files []map[string]any) []map[string]any {

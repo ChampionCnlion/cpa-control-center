@@ -216,18 +216,26 @@ type Recovery401Options struct {
 }
 
 type Recovery401Candidate struct {
-	Name          string `json:"name"`
-	Email         string `json:"email"`
-	Provider      string `json:"provider"`
-	Status        string `json:"status"`
-	StatusMessage string `json:"statusMessage"`
-	Disabled      bool   `json:"disabled"`
-	Unavailable   bool   `json:"unavailable"`
-	RuntimeOnly   bool   `json:"runtimeOnly"`
+	Name            string `json:"name"`
+	Email           string `json:"email"`
+	Provider        string `json:"provider"`
+	PlanType        string `json:"planType"`
+	Status          string `json:"status"`
+	StatusMessage   string `json:"statusMessage"`
+	StateKey        string `json:"stateKey"`
+	DetectionSource string `json:"detectionSource"`
+	APIStatusCode   *int   `json:"apiStatusCode"`
+	ProbeErrorKind  string `json:"probeErrorKind"`
+	ProbeErrorText  string `json:"probeErrorText"`
+	Disabled        bool   `json:"disabled"`
+	Unavailable     bool   `json:"unavailable"`
+	RuntimeOnly     bool   `json:"runtimeOnly"`
 }
 
 type Recovery401ScanResult struct {
 	Total      int                    `json:"total"`
+	Probed     int                    `json:"probed"`
+	Quota      *CodexQuotaSnapshot    `json:"quota,omitempty"`
 	Candidates []Recovery401Candidate `json:"candidates"`
 }
 

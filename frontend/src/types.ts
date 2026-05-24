@@ -224,8 +224,14 @@ export interface Recovery401Candidate {
   name: string
   email: string
   provider: string
+  planType: string
   status: string
   statusMessage: string
+  stateKey: string
+  detectionSource: string
+  apiStatusCode?: number | null
+  probeErrorKind: string
+  probeErrorText: string
   disabled: boolean
   unavailable: boolean
   runtimeOnly: boolean
@@ -233,6 +239,8 @@ export interface Recovery401Candidate {
 
 export interface Recovery401ScanResult {
   total: number
+  probed: number
+  quota?: CodexQuotaSnapshot | null
   candidates: Recovery401Candidate[]
 }
 

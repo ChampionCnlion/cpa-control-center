@@ -14,8 +14,10 @@ import { useI18n } from 'vue-i18n'
 import { scan401Recovery } from '@/lib/bridge'
 import { useAccountsStore } from '@/stores/accounts'
 import { useTasksStore } from '@/stores/tasks'
-import type { Recovery401Candidate, Recovery401ItemResult, Recovery401Result, Recovery401ScanResult } from '@/types'
+import type { QuotaBucketSummary, Recovery401Candidate, Recovery401ItemResult, Recovery401Result, Recovery401ScanResult } from '@/types'
 import { toErrorMessage } from '@/utils/errors'
+import { formatDateTime } from '@/utils/format'
+import { stateLabel, statusTagType } from '@/utils/status'
 
 const { t } = useI18n()
 const accountsStore = useAccountsStore()
@@ -30,9 +32,86 @@ const recoveryResult = ref<Recovery401Result | null>(null)
 const candidates = computed<Recovery401Candidate[]>(() => scanResult.value?.candidates ?? [])
 const results = computed<Recovery401ItemResult[]>(() => recoveryResult.value?.results ?? [])
 const canRun = computed(() => !tasksStore.hasActiveTask && !loadingScan.value)
+const fiveHourQuota = computed(() => aggregateQuotaBucket('fiveHour'))
+const weeklyQuota = computed(() => aggregateQuotaBucket('weekly'))
+
+type QuotaBucketKey = 'fiveHour' | 'weekly'
 
 function statusType(ok: boolean) {
   return ok ? 'success' : 'warning'
+}
+
+function aggregateQuotaBucket(key: QuotaBucketKey): QuotaBucketSummary {
+  let supported = false
+  let successCount = 0
+  let failedCount = 0
+  let totalRemainingPercent = 0
+  let hasTotal = false
+  let resetAt = ''
+
+  for (const plan of scanResult.value?.quota?.plans ?? []) {
+    const bucket = plan[key]
+    if (!bucket.supported) {
+      continue
+    }
+    supported = true
+    successCount += bucket.successCount
+    failedCount += bucket.failedCount
+    if (typeof bucket.totalRemainingPercent === 'number' && !Number.isNaN(bucket.totalRemainingPercent)) {
+      totalRemainingPercent += bucket.totalRemainingPercent
+      hasTotal = true
+    }
+    if (bucket.resetAt && (!resetAt || new Date(bucket.resetAt).getTime() < new Date(resetAt).getTime())) {
+      resetAt = bucket.resetAt
+    }
+  }
+
+  return {
+    supported,
+    totalRemainingPercent: hasTotal ? Number(totalRemainingPercent.toFixed(1)) : null,
+    resetAt,
+    successCount,
+    failedCount,
+  }
+}
+
+function formatQuotaNumber(value: number) {
+  return Math.abs(value - Math.round(value)) < 0.05 ? String(Math.round(value)) : value.toFixed(1)
+}
+
+function formatQuotaTotal(bucket: QuotaBucketSummary) {
+  if (!scanResult.value) {
+    return '-'
+  }
+  if (!bucket.supported || typeof bucket.totalRemainingPercent !== 'number' || Number.isNaN(bucket.totalRemainingPercent)) {
+    return t('quotas.unavailable')
+  }
+  return t('recovery.stats.remainingPercent', { value: formatQuotaNumber(bucket.totalRemainingPercent) })
+}
+
+function formatQuotaHint(bucket: QuotaBucketSummary) {
+  if (!scanResult.value) {
+    return t('recovery.stats.quotaHintEmpty')
+  }
+  if (!scanResult.value.quota) {
+    return t('recovery.stats.quotaUnavailableHint')
+  }
+  const coverage = t('quotas.coverage', { success: bucket.successCount, total: bucket.successCount + bucket.failedCount })
+  const reset = bucket.resetAt ? formatDateTime(bucket.resetAt) : t('common.notAvailable')
+  return t('recovery.stats.quotaHint', { coverage, reset })
+}
+
+function detectionSourceLabel(source: string) {
+  const key = `recovery.sources.${source || 'unknown'}`
+  return t(key)
+}
+
+function apiStatusLabel(row: Recovery401Candidate) {
+  return typeof row.apiStatusCode === 'number' ? String(row.apiStatusCode) : '-'
+}
+
+function candidateDetail(row: Recovery401Candidate) {
+  return row.probeErrorText || row.statusMessage || row.probeErrorKind || '-'
 }
 
 async function scanCandidates() {
@@ -112,14 +191,24 @@ async function runRecovery() {
         <small>{{ t('recovery.stats.scannedHint') }}</small>
       </article>
       <article class="stat-card">
+        <span class="stat-label">{{ t('recovery.stats.probed') }}</span>
+        <strong>{{ scanResult?.probed ?? '-' }}</strong>
+        <small>{{ t('recovery.stats.probedHint') }}</small>
+      </article>
+      <article class="stat-card">
         <span class="stat-label">{{ t('recovery.stats.candidates') }}</span>
         <strong>{{ candidates.length }}</strong>
         <small>{{ t('recovery.stats.candidatesHint') }}</small>
       </article>
       <article class="stat-card">
-        <span class="stat-label">{{ t('recovery.stats.uploaded') }}</span>
-        <strong>{{ recoveryResult?.summary.uploaded ?? 0 }}</strong>
-        <small>{{ t('recovery.stats.uploadedHint') }}</small>
+        <span class="stat-label">{{ t('recovery.stats.fiveHour') }}</span>
+        <strong>{{ formatQuotaTotal(fiveHourQuota) }}</strong>
+        <small>{{ formatQuotaHint(fiveHourQuota) }}</small>
+      </article>
+      <article class="stat-card">
+        <span class="stat-label">{{ t('recovery.stats.weekly') }}</span>
+        <strong>{{ formatQuotaTotal(weeklyQuota) }}</strong>
+        <small>{{ formatQuotaHint(weeklyQuota) }}</small>
       </article>
     </section>
 
@@ -157,8 +246,28 @@ async function runRecovery() {
             <el-table :data="candidates" height="100%">
               <el-table-column prop="name" :label="t('recovery.columns.name')" min-width="220" show-overflow-tooltip />
               <el-table-column prop="email" :label="t('recovery.columns.email')" min-width="180" show-overflow-tooltip />
-              <el-table-column prop="provider" :label="t('recovery.columns.provider')" width="110" />
-              <el-table-column prop="status" :label="t('recovery.columns.status')" width="120" show-overflow-tooltip />
+              <el-table-column prop="provider" :label="t('recovery.columns.provider')" width="100" />
+              <el-table-column prop="planType" :label="t('recovery.columns.plan')" width="95" />
+              <el-table-column :label="t('recovery.columns.state')" width="130">
+                <template #default="{ row }">
+                  <el-tag :type="statusTagType(row.stateKey)" effect="plain">{{ stateLabel(row.stateKey) }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column :label="t('recovery.columns.source')" width="130">
+                <template #default="{ row }">
+                  {{ detectionSourceLabel(row.detectionSource) }}
+                </template>
+              </el-table-column>
+              <el-table-column :label="t('recovery.columns.apiStatus')" width="95">
+                <template #default="{ row }">
+                  {{ apiStatusLabel(row) }}
+                </template>
+              </el-table-column>
+              <el-table-column :label="t('recovery.columns.message')" min-width="260" show-overflow-tooltip>
+                <template #default="{ row }">
+                  {{ candidateDetail(row) }}
+                </template>
+              </el-table-column>
             </el-table>
           </div>
         </div>
