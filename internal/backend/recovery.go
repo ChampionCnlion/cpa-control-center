@@ -29,6 +29,7 @@ const (
 var (
 	emailPattern         = regexp.MustCompile(`(?i)[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}`)
 	otpPattern           = regexp.MustCompile(`\b(\d{6})\b`)
+	recovery401Pattern   = regexp.MustCompile(`\b401\b`)
 	csrfPattern          = regexp.MustCompile(`<meta\s+name="csrf-token"\s+content="([^"]+)"`)
 	livewireSnapshotExpr = regexp.MustCompile(`wire:snapshot="([^"]+)".{0,900}?wire:id="([^"]+)"`)
 )
@@ -252,8 +253,34 @@ func isRecovery401AuthFile(file map[string]any) bool {
 		stringValue(file["status_message"]),
 		stringValue(file["error"]),
 		stringValue(file["message"]),
+		stringValue(file["code"]),
+		stringValue(file["type"]),
 	}, " "))
-	return regexp.MustCompile(`\b401\b`).MatchString(text) || strings.Contains(text, "unauthorized") || boolValueFromAny(file["unavailable"])
+	if isRecoveryNonAuthLimit(text) {
+		return false
+	}
+	return hasRecoveryAuthFailureSignal(text)
+}
+
+func hasRecoveryAuthFailureSignal(text string) bool {
+	return recovery401Pattern.MatchString(text) ||
+		strings.Contains(text, "unauthorized") ||
+		strings.Contains(text, "authentication_error") ||
+		strings.Contains(text, "auth_unavailable") ||
+		strings.Contains(text, "authentication token has been invalidated") ||
+		strings.Contains(text, "token has been invalidated") ||
+		strings.Contains(text, "signing in again") ||
+		strings.Contains(text, "sign in again") ||
+		strings.Contains(text, "not authenticated") ||
+		strings.Contains(text, "login required")
+}
+
+func isRecoveryNonAuthLimit(text string) bool {
+	return strings.Contains(text, "usage_limit_reached") ||
+		strings.Contains(text, "limit_reached") ||
+		strings.Contains(text, "rate_limit") ||
+		strings.Contains(text, "quota") ||
+		strings.Contains(text, "stream disconnected")
 }
 
 func looksLikeRecoveryCodexFile(file map[string]any, authJSON map[string]any) bool {
