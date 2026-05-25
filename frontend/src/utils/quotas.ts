@@ -31,10 +31,16 @@ export function quotaPlanRank(value: string) {
 }
 
 export function quotaTotalRemaining(account: CodexQuotaAccountDetail) {
-  return [account.fiveHour, account.weekly, account.codeReviewWeekly].reduce((sum, bucket) => {
-    const value = bucketNumber(bucket.remainingPercent)
-    return value === null ? sum : sum + value
-  }, 0)
+  const values = [account.fiveHour, account.weekly]
+    .filter((bucket) => bucket.supported)
+    .map((bucket) => bucketNumber(bucket.remainingPercent))
+    .filter((value): value is number => value !== null)
+
+  if (values.length === 0) {
+    return null
+  }
+
+  return Math.min(...values)
 }
 
 export function quotaRecoveryResetAt(account: CodexQuotaAccountDetail, mode: QuotaRecoveryMode) {
@@ -132,9 +138,15 @@ export function compareQuotaAccounts(mode: QuotaSortMode) {
 
     switch (mode) {
       case 'total': {
-        const diff = quotaTotalRemaining(right) - quotaTotalRemaining(left)
-        if (Math.abs(diff) > 0.01) {
-          return diff
+        const leftValue = quotaTotalRemaining(left)
+        const rightValue = quotaTotalRemaining(right)
+        if (leftValue !== null && rightValue !== null) {
+          const diff = rightValue - leftValue
+          if (Math.abs(diff) > 0.01) {
+            return diff
+          }
+        } else if (leftValue !== rightValue) {
+          return leftValue === null ? 1 : -1
         }
         break
       }

@@ -69,6 +69,15 @@ function statusLabel(account: CodexQuotaAccountDetail) {
   return account.success ? t('quotas.matrix.success') : t('quotas.matrix.failed')
 }
 
+function totalRemainingText(account: CodexQuotaAccountDetail) {
+  const value = quotaTotalRemaining(account)
+  if (value === null) {
+    return t('quotas.unavailable')
+  }
+  const rounded = Math.abs(value - Math.round(value)) < 0.05 ? Math.round(value) : value.toFixed(1)
+  return `${rounded}%`
+}
+
 function fetchedAtLabel() {
   return t('quotas.matrix.detailFetchedAt', { value: '' }).replace(/[:\uFF1A]\s*$/, '').trim()
 }
@@ -112,7 +121,7 @@ function fetchedAtLabel() {
             </div>
 
             <div class="quota-detail-modal__headline">
-              <strong>{{ t('quotas.matrix.totalRemaining', { value: Math.round(quotaTotalRemaining(account)) }) }}</strong>
+              <strong>{{ t('quotas.matrix.totalRemaining') }} {{ totalRemainingText(account) }}</strong>
               <span class="quota-detail-modal__headline-meta">
                 <span class="quota-detail-modal__field-label">{{ t('quotas.resetAtShort') }}:</span>
                 <span class="quota-detail-modal__field-value">{{ resetText(account.earliestResetAt) }}</span>

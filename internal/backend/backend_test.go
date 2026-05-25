@@ -857,6 +857,38 @@ func TestParseQuotaBucketResultMapsFreePrimaryWindowToWeekly(t *testing.T) {
 	}
 }
 
+func TestParseQuotaBucketResultAppliesWeeklyExhaustionNormalization(t *testing.T) {
+	payload := map[string]any{
+		"plan_type": "team",
+		"rate_limits": map[string]any{
+			"five_hour": map[string]any{
+				"used_percent":   20,
+				"reset_at":       "2026-03-16T04:45:00Z",
+				"window_seconds": 18000,
+			},
+			"weekly": map[string]any{
+				"used_percent":   100,
+				"reset_at":       "2026-03-17T13:01:00Z",
+				"window_seconds": 604800,
+			},
+		},
+	}
+
+	result, err := parseQuotaBucketResult(payload)
+	if err != nil {
+		t.Fatalf("parseQuotaBucketResult: %v", err)
+	}
+	if result.fiveHour == nil {
+		t.Fatal("expected normalized five-hour bucket")
+	}
+	if result.fiveHour.remainingPercent != 0 {
+		t.Fatalf("expected normalized five-hour remaining to be zero, got %+v", result.fiveHour)
+	}
+	if result.fiveHour.resetAt != "2026-03-17T13:01:00Z" {
+		t.Fatalf("expected normalized five-hour reset to follow weekly reset, got %+v", result.fiveHour)
+	}
+}
+
 func TestNormalizeQuotaBucketResultZeroesFiveHourWhenWeeklyIsEmpty(t *testing.T) {
 	result := normalizeQuotaBucketResult(quotaBucketResult{
 		fiveHour: &quotaBucketValue{
@@ -884,6 +916,35 @@ func TestNormalizeQuotaBucketResultZeroesFiveHourWhenWeeklyIsEmpty(t *testing.T)
 	}
 	if result.weekly == nil || result.weekly.remainingPercent != 0 {
 		t.Fatalf("expected weekly bucket to remain unchanged, got %+v", result.weekly)
+	}
+}
+
+func TestBuildQuotaAccountDetailIgnoresCodeReviewResetForEarliestRecovery(t *testing.T) {
+	detail := buildQuotaAccountDetail(quotaFetchOutcome{
+		record: AccountRecord{
+			Name:     "team-a",
+			PlanType: "team",
+			Provider: "codex",
+		},
+		planType: "team",
+		result: quotaBucketResult{
+			fiveHour: &quotaBucketValue{
+				remainingPercent: 70,
+				resetAt:          "2026-03-18T00:00:00Z",
+			},
+			weekly: &quotaBucketValue{
+				remainingPercent: 55,
+				resetAt:          "2026-03-19T00:00:00Z",
+			},
+			codeReviewWeekly: &quotaBucketValue{
+				remainingPercent: 100,
+				resetAt:          "2026-03-17T00:00:00Z",
+			},
+		},
+	}, "2026-03-16T00:00:00Z")
+
+	if detail.EarliestResetAt != "2026-03-18T00:00:00Z" {
+		t.Fatalf("expected earliest recovery reset to ignore code-review bucket, got %+v", detail)
 	}
 }
 
@@ -1157,6 +1218,117 @@ func TestBackendMaintainDisablesUsageLimit401Accounts(t *testing.T) {
 	}
 	if len(serverState.disabled) != 1 || serverState.disabled[0] != "quota-free.json" {
 		t.Fatalf("expected quota-free.json to be disabled, got %+v", serverState.disabled)
+	}
+}
+
+func TestBackendMaintainDoesNotReenableBeforePrimaryQuotaRecovers(t *testing.T) {
+	var reenabled []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v0/management/auth-files":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"files": []map[string]any{
+					{
+						"name":       "still-limited.json",
+						"type":       "codex",
+						"provider":   "codex",
+						"auth_index": "still-limited",
+						"disabled":   true,
+						"id_token":   `{"chatgpt_account_id":"acct-still-limited","plan_type":"pro"}`,
+					},
+				},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/v0/management/api-call":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status_code": 200,
+				"body": `{
+					"plan_type":"pro",
+					"rate_limit":{"allowed":true,"limit_reached":false},
+					"rate_limits":{
+						"five_hour":{"used_percent":20,"reset_at":"2026-03-16T04:45:00Z","window_seconds":18000},
+						"weekly":{"used_percent":100,"reset_at":"2026-03-17T13:01:00Z","window_seconds":604800}
+					}
+				}`,
+			})
+		case r.Method == http.MethodPatch && r.URL.Path == "/v0/management/auth-files/status":
+			var body struct {
+				Name     string `json:"name"`
+				Disabled bool   `json:"disabled"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if !body.Disabled {
+				reenabled = append(reenabled, body.Name)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	dataDir := t.TempDir()
+	service, err := New(dataDir, nil)
+	if err != nil {
+		t.Fatalf("New backend: %v", err)
+	}
+	defer service.Close()
+
+	_, err = service.SaveSettings(AppSettings{
+		BaseURL:         server.URL,
+		ManagementToken: "token",
+		Locale:          localeEnglish,
+		TargetType:      "codex",
+		ProbeWorkers:    2,
+		ActionWorkers:   1,
+		TimeoutSeconds:  5,
+		Retries:         0,
+		UserAgent:       defaultUserAgent,
+		QuotaAction:     "disable",
+		AutoReenable:    true,
+	})
+	if err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+
+	if err := service.store.UpsertCurrentAccount(AccountRecord{
+		Name:             "still-limited.json",
+		Type:             "codex",
+		Provider:         "codex",
+		State:            stateQuotaLimited,
+		StateKey:         stateQuotaLimited,
+		Disabled:         true,
+		ManagedReason:    "quota_disabled",
+		AuthIndex:        "still-limited",
+		ChatGPTAccountID: "acct-still-limited",
+		UpdatedAt:        nowISO(),
+		LastSeenAt:       nowISO(),
+	}); err != nil {
+		t.Fatalf("UpsertCurrentAccount: %v", err)
+	}
+
+	result, err := service.RunMaintain(MaintainOptions{
+		QuotaAction:  "disable",
+		AutoReenable: true,
+	})
+	if err != nil {
+		t.Fatalf("RunMaintain: %v", err)
+	}
+	if len(result.ReenableResults) != 0 {
+		t.Fatalf("expected no reenable results while weekly bucket is still empty, got %+v", result.ReenableResults)
+	}
+
+	records, err := service.ListAccounts(AccountFilter{Type: "codex"})
+	if err != nil {
+		t.Fatalf("ListAccounts: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("expected one record, got %d", len(records))
+	}
+	if records[0].StateKey != stateQuotaLimited || !records[0].Disabled {
+		t.Fatalf("expected account to remain quota-limited and disabled, got %+v", records[0])
+	}
+	if len(reenabled) != 0 {
+		t.Fatalf("expected no reenable API calls, got %+v", reenabled)
 	}
 }
 

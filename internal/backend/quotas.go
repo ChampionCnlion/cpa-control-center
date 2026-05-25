@@ -621,7 +621,7 @@ func buildQuotaAccountDetail(outcome quotaFetchOutcome, fetchedAt string) CodexQ
 	detail.FiveHour = quotaBucketDetail(planType, quotaBucketFiveHour, outcome.result.fiveHour)
 	detail.Weekly = quotaBucketDetail(planType, quotaBucketWeekly, outcome.result.weekly)
 	detail.CodeReviewWeekly = quotaBucketDetail(planType, quotaBucketCodeReviewWeekly, outcome.result.codeReviewWeekly)
-	detail.EarliestResetAt = earliestQuotaBucketReset(detail.FiveHour, detail.Weekly, detail.CodeReviewWeekly)
+	detail.EarliestResetAt = earliestQuotaBucketReset(detail.FiveHour, detail.Weekly)
 	return detail
 }
 
@@ -719,11 +719,13 @@ func parseQuotaBucketResult(payload map[string]any) (quotaBucketResult, error) {
 		return quotaBucketResult{}, errors.New("no quota buckets found")
 	}
 
-	return quotaBucketResult{
+	result := quotaBucketResult{
 		fiveHour:         selectQuotaCandidateValue(candidates, quotaBucketFiveHour, planType),
 		weekly:           selectQuotaCandidateValue(candidates, quotaBucketWeekly, planType),
 		codeReviewWeekly: selectQuotaCandidateValue(candidates, quotaBucketCodeReviewWeekly, planType),
-	}, nil
+	}
+
+	return normalizeQuotaBucketResult(result), nil
 }
 
 func collectQuotaCandidates(path string, value any) []quotaCandidate {
