@@ -35,6 +35,7 @@ VOLUME ["/data"]
 EXPOSE 8080
 
 COPY --from=backend-builder /out/cpa-control-center-web /usr/local/bin/cpa-control-center-web
+COPY --from=curl-impersonate /build/out/curl-impersonate-ff /usr/local/bin/curl-impersonate-ff
 COPY --from=curl-impersonate /build/out/curl_ff117 /usr/local/bin/curl_ff117
 COPY internal/backend/openai_sentinel_token.js /app/openai_sentinel_token.js
 
