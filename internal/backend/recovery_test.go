@@ -116,14 +116,29 @@ func TestRecovery401CandidateDetectionPrefersLiveProbe(t *testing.T) {
 			wantOK: false,
 		},
 		{
-			name: "auth status is fallback when live probe is inconclusive",
+			name: "missing chatgpt account id wins over stale auth",
 			file: auth401,
 			probe: UsageProbeResult{Record: AccountRecord{
 				Name:           "stale-401.codex.json",
 				StateKey:       stateError,
 				ProbeErrorKind: "missing_chatgpt_account_id",
 			}},
-			wantSource: "auth_status",
+			wantSource: "usage_probe",
+			wantOK:     true,
+		},
+		{
+			name: "missing chatgpt account id with weak file signal is still candidate",
+			file: map[string]any{
+				"name":           "missing-id.codex.json",
+				"status":         "error",
+				"status_message": "upstream stream closed before first payload",
+			},
+			probe: UsageProbeResult{Record: AccountRecord{
+				Name:           "missing-id.codex.json",
+				StateKey:       stateError,
+				ProbeErrorKind: "missing_chatgpt_account_id",
+			}},
+			wantSource: "usage_probe",
 			wantOK:     true,
 		},
 	}

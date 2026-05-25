@@ -411,6 +411,9 @@ func buildRecovery401ScanResult(files []map[string]any) Recovery401ScanResult {
 }
 
 func recovery401CandidateDetectionSource(file map[string]any, probe UsageProbeResult) (string, bool) {
+	if strings.TrimSpace(probe.Record.ProbeErrorKind) == "missing_chatgpt_account_id" {
+		return "usage_probe", true
+	}
 	state := normalizeStateKey(probe.Record.StateKey)
 	switch state {
 	case stateInvalid401:
