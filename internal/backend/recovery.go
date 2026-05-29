@@ -236,12 +236,14 @@ func (b *Backend) recoverOne401Credential(ctx context.Context, settings AppSetti
 		if refreshErr == nil {
 			cpa := buildCPAAuthJSONFromSession(session, email, sessionToken, authJSON)
 			if err := validateCPAAuthJSON(cpa); err != nil {
-				return Recovery401ItemResult{Name: name, Email: email, Action: "convert_failed", OK: false, Message: err.Error()}
+				b.emitDetailedLog(settings.DetailedLogs, recoveryKind, "warning", fmt.Sprintf("%s session refresh conversion failed: %s", email, err.Error()))
+			} else {
+				item := b.uploadAndVerifyRecoveredAuthFile(ctx, settings, name, email, cpa, "session token refreshed and verified by Codex usage probe")
+				if item.OK {
+					return item
+				}
+				b.emitDetailedLog(settings.DetailedLogs, recoveryKind, "warning", fmt.Sprintf("%s session refresh verification failed: %s; trying full re-login", email, item.Message))
 			}
-			if err := b.client.UploadAuthFile(ctx, settings, name, cpa); err != nil {
-				return Recovery401ItemResult{Name: name, Email: email, Action: "upload_failed", OK: false, Message: "upload failed after session refresh: " + err.Error()}
-			}
-			return Recovery401ItemResult{Name: name, Email: email, Action: "uploaded", OK: true, Message: "session token refreshed and CPA auth file uploaded"}
 		}
 		b.emitDetailedLog(settings.DetailedLogs, recoveryKind, "warning", fmt.Sprintf("%s session refresh failed: %s", email, refreshErr.Error()))
 	}
@@ -261,10 +263,68 @@ func (b *Backend) recoverOne401Credential(ctx context.Context, settings AppSetti
 	if err := validateCPAAuthJSON(cpa); err != nil {
 		return Recovery401ItemResult{Name: name, Email: email, Action: "convert_failed", OK: false, Message: err.Error()}
 	}
+	return b.uploadAndVerifyRecoveredAuthFile(ctx, settings, name, email, cpa, "re-login succeeded and verified by Codex usage probe")
+}
+
+func (b *Backend) uploadAndVerifyRecoveredAuthFile(ctx context.Context, settings AppSettings, name string, email string, cpa map[string]any, successMessage string) Recovery401ItemResult {
 	if err := b.client.UploadAuthFile(ctx, settings, name, cpa); err != nil {
-		return Recovery401ItemResult{Name: name, Email: email, Action: "upload_failed", OK: false, Message: "upload failed after re-login: " + err.Error()}
+		return Recovery401ItemResult{Name: name, Email: email, Action: "upload_failed", OK: false, Message: "upload failed: " + err.Error()}
 	}
-	return Recovery401ItemResult{Name: name, Email: email, Action: "uploaded", OK: true, Message: "re-login succeeded and CPA auth file uploaded"}
+
+	probe, err := b.verifyRecoveredAuthFile(ctx, settings, name, cpa)
+	if err != nil {
+		return Recovery401ItemResult{Name: name, Email: email, Action: "verify_failed", OK: false, Message: "uploaded but verification failed: " + err.Error()}
+	}
+	if probe.Record.QuotaLimited {
+		return Recovery401ItemResult{Name: name, Email: email, Action: "uploaded", OK: true, Message: successMessage + "; account is authenticated but quota-limited"}
+	}
+	return Recovery401ItemResult{Name: name, Email: email, Action: "uploaded", OK: true, Message: successMessage}
+}
+
+func (b *Backend) verifyRecoveredAuthFile(ctx context.Context, settings AppSettings, name string, cpa map[string]any) (UsageProbeResult, error) {
+	files, err := b.client.FetchAuthFiles(ctx, settings)
+	if err != nil {
+		return UsageProbeResult{}, err
+	}
+	file, ok := findManagedAuthFileByName(files, name)
+	if !ok {
+		return UsageProbeResult{}, fmt.Errorf("uploaded auth file %q was not returned by CPA inventory", name)
+	}
+
+	record := b.client.BuildAccountRecord(file, nil, nowISO())
+	if record.ChatGPTAccountID == "" {
+		record.ChatGPTAccountID = extractChatGPTAccountID(cpa)
+	}
+	if record.PlanType == "" {
+		record.PlanType = strings.TrimSpace(stringOr(stringValue(cpa["chatgpt_plan_type"]), stringValue(cpa["plan_type"])))
+	}
+	if record.Provider == "" {
+		record.Provider = "codex"
+	}
+	if record.Type == "" {
+		record.Type = "codex"
+	}
+	if strings.TrimSpace(record.AuthIndex) == "" {
+		return UsageProbeResult{}, errors.New("uploaded auth file has no auth index for verification")
+	}
+	if strings.TrimSpace(record.ChatGPTAccountID) == "" {
+		return UsageProbeResult{}, errors.New(msg(settings.Locale, "error.missing_chatgpt_account_id"))
+	}
+
+	probe := b.client.ProbeUsageResult(ctx, settings, record)
+	if probe.Record.Invalid401 {
+		return probe, fmt.Errorf("Codex usage probe still returned status_code=%d", intValue(probe.Record.APIStatusCode))
+	}
+	if probe.Record.ProbeErrorKind != "" && !probe.Record.QuotaLimited {
+		if probe.Record.ProbeErrorText != "" {
+			return probe, errors.New(probe.Record.ProbeErrorText)
+		}
+		return probe, errors.New(probe.Record.ProbeErrorKind)
+	}
+	if probe.UsageError != nil && !probe.Record.QuotaLimited {
+		return probe, probe.UsageError
+	}
+	return probe, nil
 }
 
 func (b *Backend) buildRecovery401ProbeScanResult(ctx context.Context, settings AppSettings, files []map[string]any) (Recovery401ScanResult, []map[string]any, error) {
@@ -460,6 +520,37 @@ func filterRecovery401Candidates(files []map[string]any) []map[string]any {
 		return strings.TrimSpace(stringValue(candidates[i]["name"])) < strings.TrimSpace(stringValue(candidates[j]["name"]))
 	})
 	return candidates
+}
+
+func findManagedAuthFileByName(files []map[string]any, name string) (map[string]any, bool) {
+	candidates := managedAccountNameCandidates(name, false, true)
+	candidateSet := make(map[string]struct{}, len(candidates)*2)
+	for _, candidate := range candidates {
+		trimmed := strings.TrimSpace(candidate)
+		if trimmed == "" {
+			continue
+		}
+		candidateSet[trimmed] = struct{}{}
+		if normalized := normalizeManagedAccountName(trimmed); normalized != "" {
+			candidateSet[normalized] = struct{}{}
+		}
+	}
+
+	for _, file := range files {
+		fileName := strings.TrimSpace(stringValue(file["name"]))
+		if fileName == "" {
+			fileName = strings.TrimSpace(stringValue(file["id"]))
+		}
+		if _, ok := candidateSet[fileName]; ok {
+			return file, true
+		}
+		if normalized := normalizeManagedAccountName(fileName); normalized != "" {
+			if _, ok := candidateSet[normalized]; ok {
+				return file, true
+			}
+		}
+	}
+	return nil, false
 }
 
 func isRecovery401AuthFile(file map[string]any) bool {
@@ -952,17 +1043,17 @@ func extractChatGPTSessionInfo(session map[string]any) chatGPTSessionInfo {
 		if info.Email == "" {
 			info.Email = strings.TrimSpace(stringOr(stringValue(claims["email"]), stringValue(profileClaims["email"]), stringValue(authClaims["email"])))
 		}
-		if info.AccountID == "" {
-			info.AccountID = strings.TrimSpace(stringOr(stringValue(authClaims["chatgpt_account_id"]), stringValue(authClaims["account_id"])))
+		if claimAccountID := strings.TrimSpace(stringOr(stringValue(authClaims["chatgpt_account_id"]), stringValue(authClaims["account_id"]))); claimAccountID != "" {
+			info.AccountID = claimAccountID
 		}
-		if info.UserID == "" {
-			info.UserID = strings.TrimSpace(stringOr(stringValue(authClaims["chatgpt_user_id"]), stringValue(authClaims["user_id"]), stringValue(claims["sub"])))
+		if claimUserID := strings.TrimSpace(stringOr(stringValue(authClaims["chatgpt_user_id"]), stringValue(authClaims["user_id"]), stringValue(claims["sub"]))); claimUserID != "" {
+			info.UserID = claimUserID
 		}
-		if info.OrganizationID == "" {
-			info.OrganizationID = strings.TrimSpace(stringValue(authClaims["organization_id"]))
+		if claimOrganizationID := strings.TrimSpace(stringValue(authClaims["organization_id"])); claimOrganizationID != "" {
+			info.OrganizationID = claimOrganizationID
 		}
-		if info.PlanType == "" {
-			info.PlanType = strings.TrimSpace(stringOr(stringValue(authClaims["chatgpt_plan_type"]), stringValue(authClaims["plan_type"])))
+		if claimPlanType := strings.TrimSpace(stringOr(stringValue(authClaims["chatgpt_plan_type"]), stringValue(authClaims["plan_type"]))); claimPlanType != "" {
+			info.PlanType = claimPlanType
 		}
 		if exp, ok := intValueFromAny(claims["exp"]); ok && exp > 0 {
 			info.ExpiresAtUnix = int64(exp)
@@ -1599,9 +1690,24 @@ func completeModernOpenAILogin(ctx context.Context, client *http.Client, state *
 	if err := doOpenAIJSONWithHeaders(ctx, client, http.MethodPost, authOpenAIOrigin+"/api/accounts/email-otp/validate", mustJSONReader(payload), userAgent, authOpenAIOrigin+"/email-verification", &parsed, openAISentinelHeaders(state), "application/json"); err != nil {
 		return "", err
 	}
+	if openAIResponseIndicatesAccessDeactivated(parsed) {
+		return "", errors.New("OpenAI returned Access Deactivated after OTP validation; this account cannot be recovered by server-side re-login")
+	}
 	continueURL = normalizeURL(extractContinueURL(parsed), authOpenAIOrigin)
+	if openAIURLIndicatesAccessDeactivated(continueURL) {
+		return "", errors.New("OpenAI redirected to Access Deactivated after OTP validation; this account cannot be recovered by server-side re-login")
+	}
 	if continueURL == "" {
-		return "", errors.New("OpenAI did not return a continue URL after OTP validation")
+		if openAIPageRequiresPhone(parsed) {
+			return "", errors.New("OpenAI requested phone verification after OTP validation; finish the phone challenge in a browser before server-side recovery")
+		}
+		if openAIResponseLooksComplete(parsed) {
+			if onStatus != nil {
+				onStatus("session", "OTP validation returned no redirect; checking session directly")
+			}
+			return "", nil
+		}
+		return "", fmt.Errorf("OpenAI did not return a continue URL after OTP validation (%s)", openAIPageSummary(parsed))
 	}
 	return continueURL, nil
 }
@@ -1921,19 +2027,191 @@ func normalizeURL(raw string, base string) string {
 }
 
 func extractContinueURL(data map[string]any) string {
-	for _, key := range []string{"continue_url", "continueUrl", "redirect_url", "redirectUrl", "url"} {
-		if value := strings.TrimSpace(stringValue(data[key])); value != "" {
-			return value
-		}
-	}
-	if page, ok := data["page"].(map[string]any); ok {
-		if payload, ok := page["payload"].(map[string]any); ok {
-			if value := strings.TrimSpace(stringValue(payload["continue_url"])); value != "" {
+	return extractContinueURLFromAny(data)
+}
+
+func extractContinueURLFromAny(value any) string {
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, key := range []string{
+			"continue_url",
+			"continueUrl",
+			"continue",
+			"continue_to",
+			"continueTo",
+			"redirect_url",
+			"redirectUrl",
+			"redirect_uri",
+			"redirectUri",
+			"return_to",
+			"returnTo",
+			"next_url",
+			"nextUrl",
+			"authorization_url",
+			"authorizationUrl",
+			"authorize_url",
+			"authorizeUrl",
+			"callback_url",
+			"callbackUrl",
+			"location",
+			"href",
+			"url",
+		} {
+			if value := strings.TrimSpace(stringValue(typed[key])); looksLikeOpenAIContinueURL(value) {
 				return value
+			}
+		}
+		for _, key := range []string{"page", "payload", "data", "result", "next", "authorization", "auth"} {
+			if found := extractContinueURLFromAny(typed[key]); found != "" {
+				return found
+			}
+		}
+		for _, nested := range typed {
+			if found := extractContinueURLFromAny(nested); found != "" {
+				return found
+			}
+		}
+	case []any:
+		for _, item := range typed {
+			if found := extractContinueURLFromAny(item); found != "" {
+				return found
 			}
 		}
 	}
 	return ""
+}
+
+func looksLikeOpenAIContinueURL(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	return strings.HasPrefix(trimmed, "/") ||
+		strings.HasPrefix(lower, "https://auth.openai.com/") ||
+		strings.HasPrefix(lower, "https://chatgpt.com/") ||
+		strings.HasPrefix(lower, "https://chat.openai.com/")
+}
+
+func openAIPageType(data map[string]any) string {
+	for _, path := range []string{"page.type", "type", "screen", "name"} {
+		if value := strings.ToLower(strings.TrimSpace(stringValue(mapValue(data, path)))); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func openAIPageRequiresPhone(data map[string]any) bool {
+	pageType := openAIPageType(data)
+	if strings.Contains(pageType, "phone") {
+		return true
+	}
+	collected := make([]string, 0)
+	collectStrings(data, &collected)
+	for _, text := range collected {
+		lower := strings.ToLower(text)
+		if strings.Contains(lower, "phone") && (strings.Contains(lower, "verification") ||
+			strings.Contains(lower, "verify") ||
+			strings.Contains(lower, "challenge") ||
+			strings.Contains(lower, "number")) {
+			return true
+		}
+	}
+	return false
+}
+
+func openAIResponseIndicatesAccessDeactivated(data map[string]any) bool {
+	if openAITextIndicatesAccessDeactivated(openAIPageType(data)) {
+		return true
+	}
+	collected := make([]string, 0)
+	collectStrings(data, &collected)
+	for _, text := range collected {
+		if openAITextIndicatesAccessDeactivated(text) {
+			return true
+		}
+	}
+	return false
+}
+
+func openAIURLIndicatesAccessDeactivated(rawURL string) bool {
+	if strings.TrimSpace(rawURL) == "" {
+		return false
+	}
+	return openAITextIndicatesAccessDeactivated(rawURL)
+}
+
+func openAITextIndicatesAccessDeactivated(text string) bool {
+	lower := strings.ToLower(strings.TrimSpace(text))
+	if lower == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"access_deactivated",
+		"access deactivated",
+		"account_deactivated",
+		"account deactivated",
+		"deactivated account",
+		"account_disabled",
+		"account disabled",
+		"account_suspended",
+		"account suspended",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func openAIResponseLooksComplete(data map[string]any) bool {
+	pageType := openAIPageType(data)
+	if pageType == "" && len(data) == 0 {
+		return true
+	}
+	for _, marker := range []string{"complete", "completed", "success", "done"} {
+		if strings.Contains(pageType, marker) {
+			return true
+		}
+	}
+	for _, path := range []string{"ok", "success", "complete", "completed"} {
+		if boolValueFromAny(mapValue(data, path)) {
+			return true
+		}
+	}
+	if status := strings.ToLower(strings.TrimSpace(stringValue(mapValue(data, "status")))); status != "" {
+		for _, marker := range []string{"complete", "completed", "success", "done"} {
+			if strings.Contains(status, marker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func openAIPageSummary(data map[string]any) string {
+	parts := make([]string, 0, 2)
+	if pageType := openAIPageType(data); pageType != "" {
+		parts = append(parts, "page="+pageType)
+	}
+	keys := make([]string, 0, len(data))
+	for key := range data {
+		if strings.TrimSpace(key) != "" {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	if len(keys) > 8 {
+		keys = keys[:8]
+	}
+	if len(keys) > 0 {
+		parts = append(parts, "keys="+strings.Join(keys, ","))
+	}
+	if len(parts) == 0 {
+		return "empty response"
+	}
+	return strings.Join(parts, "; ")
 }
 
 func needsModernOTP(pageType string, continueURL string) bool {

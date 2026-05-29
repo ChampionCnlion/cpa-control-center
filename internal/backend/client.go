@@ -770,10 +770,8 @@ func parseUsageLimitResetSeconds(value any) (int, bool) {
 func extractChatGPTAccountID(item map[string]any) string {
 	idToken := idTokenObject(item)
 	for _, source := range []map[string]any{idToken, item} {
-		for _, key := range []string{"chatgpt_account_id", "chatgptAccountId", "account_id", "accountId"} {
-			if value := strings.TrimSpace(stringValue(source[key])); value != "" {
-				return value
-			}
+		if value := chatGPTAccountIDFromClaims(source); value != "" {
+			return value
 		}
 	}
 	return ""
@@ -781,7 +779,12 @@ func extractChatGPTAccountID(item map[string]any) string {
 
 func extractIDTokenPlanType(item map[string]any) string {
 	idToken := idTokenObject(item)
-	return strings.TrimSpace(stringValue(idToken["plan_type"]))
+	for _, source := range []map[string]any{idToken, item} {
+		if value := chatGPTPlanTypeFromClaims(source); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func idTokenObject(item map[string]any) map[string]any {
@@ -793,10 +796,54 @@ func objectFromAny(value any) map[string]any {
 	case map[string]any:
 		return typed
 	case string:
-		return parseJSONString(typed)
+		if parsed := parseJSONString(typed); len(parsed) > 0 {
+			return parsed
+		}
+		if claims := decodeJWTPayload(typed); claims != nil {
+			return claims
+		}
+		return map[string]any{}
 	default:
 		return map[string]any{}
 	}
+}
+
+func chatGPTAccountIDFromClaims(source map[string]any) string {
+	if len(source) == 0 {
+		return ""
+	}
+	for _, key := range []string{"chatgpt_account_id", "chatgptAccountId", "account_id", "accountId"} {
+		if value := strings.TrimSpace(stringValue(source[key])); value != "" {
+			return value
+		}
+	}
+	if authClaims, ok := source["https://api.openai.com/auth"].(map[string]any); ok {
+		for _, key := range []string{"chatgpt_account_id", "chatgptAccountId", "account_id", "accountId"} {
+			if value := strings.TrimSpace(stringValue(authClaims[key])); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func chatGPTPlanTypeFromClaims(source map[string]any) string {
+	if len(source) == 0 {
+		return ""
+	}
+	for _, key := range []string{"chatgpt_plan_type", "chatgptPlanType", "plan_type", "planType"} {
+		if value := strings.TrimSpace(stringValue(source[key])); value != "" {
+			return value
+		}
+	}
+	if authClaims, ok := source["https://api.openai.com/auth"].(map[string]any); ok {
+		for _, key := range []string{"chatgpt_plan_type", "chatgptPlanType", "plan_type", "planType"} {
+			if value := strings.TrimSpace(stringValue(authClaims[key])); value != "" {
+				return value
+			}
+		}
+	}
+	return ""
 }
 
 func parseJSONString(raw string) map[string]any {
