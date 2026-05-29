@@ -1583,7 +1583,7 @@ func loginChatGPTWithEmailOTP(ctx context.Context, email string, userAgent strin
 	if err != nil {
 		return nil, err
 	}
-	if !chatGPTSessionHasAccessToken(session) && callbackURL == "" {
+	if !chatGPTSessionHasAccessToken(session) {
 		if onStatus != nil {
 			onStatus("callback", "resolving callback after OTP validation")
 		}
@@ -1864,6 +1864,9 @@ func kickoffModernOTP(ctx context.Context, client *http.Client, state *openAILog
 func followOpenAICallback(ctx context.Context, client *http.Client, callbackURL string, userAgent string) error {
 	current := callbackURL
 	for i := 0; i < 10; i++ {
+		if openAIURLIndicatesAccessDeactivated(current) {
+			return classifiedRecoveryError("oauth_access_deactivated", "OpenAI redirected to Access Deactivated after OTP validation; this account cannot be recovered by OAuth recovery", nil)
+		}
 		req, err := newOpenAIRequest(ctx, http.MethodGet, current, nil, userAgent, "")
 		if err != nil {
 			return err
@@ -1873,14 +1876,27 @@ func followOpenAICallback(ctx context.Context, client *http.Client, callbackURL 
 		if err != nil {
 			return err
 		}
-		_, _ = io.Copy(io.Discard, resp.Body)
+		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
 		resp.Body.Close()
+		if readErr != nil {
+			return readErr
+		}
+		if isCloudflareChallenge(resp, data) {
+			err := cloudflareChallengeError(current, resp.StatusCode)
+			return classifiedRecoveryError("oauth_cloudflare_blocked", "OAuth callback blocked by Cloudflare challenge: "+err.Error(), err)
+		}
+		if openAITextIndicatesAccessDeactivated(string(data)) {
+			return classifiedRecoveryError("oauth_access_deactivated", "OpenAI returned Access Deactivated after OTP validation; this account cannot be recovered by OAuth recovery", nil)
+		}
 		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
 			location := resp.Header.Get("Location")
 			if location == "" {
 				return nil
 			}
 			current = normalizeURL(location, current)
+			if openAIURLIndicatesAccessDeactivated(current) {
+				return classifiedRecoveryError("oauth_access_deactivated", "OpenAI redirected to Access Deactivated after OTP validation; this account cannot be recovered by OAuth recovery", nil)
+			}
 			if strings.Contains(current, "chatgpt.com") && !strings.Contains(current, "/api/auth/") {
 				return nil
 			}
