@@ -231,28 +231,11 @@ func (b *Backend) recoverOne401Credential(ctx context.Context, settings AppSetti
 		return Recovery401ItemResult{Name: name, Email: email, Action: "skipped", OK: false, Message: "not a codex/openai auth file"}
 	}
 
-	if sessionToken := extractSessionToken(authJSON); sessionToken != "" {
-		session, refreshErr := refreshChatGPTSession(ctx, sessionToken, settings.UserAgent)
-		if refreshErr == nil {
-			cpa := buildCPAAuthJSONFromSession(session, email, sessionToken, authJSON)
-			if err := validateCPAAuthJSON(cpa); err != nil {
-				b.emitDetailedLog(settings.DetailedLogs, recoveryKind, "warning", fmt.Sprintf("%s session refresh conversion failed: %s", email, err.Error()))
-			} else {
-				item := b.uploadAndVerifyRecoveredAuthFile(ctx, settings, name, email, cpa, "session token refreshed and verified by Codex usage probe")
-				if item.OK {
-					return item
-				}
-				b.emitDetailedLog(settings.DetailedLogs, recoveryKind, "warning", fmt.Sprintf("%s session refresh verification failed: %s; trying full re-login", email, item.Message))
-			}
-		}
-		b.emitDetailedLog(settings.DetailedLogs, recoveryKind, "warning", fmt.Sprintf("%s session refresh failed: %s", email, refreshErr.Error()))
-	}
-
 	session, err := loginChatGPTWithPostInBox(ctx, email, emailServiceURL, settings.UserAgent, func(status string, detail string) {
 		b.emitDetailedLog(settings.DetailedLogs, recoveryKind, "info", fmt.Sprintf("%s %s: %s", email, status, detail))
 	})
 	if err != nil {
-		return Recovery401ItemResult{Name: name, Email: email, Action: "login_failed", OK: false, Message: "re-login failed: " + err.Error()}
+		return recoveryOAuthFailureResult(name, email, err)
 	}
 
 	sessionToken := strings.TrimSpace(stringValue(session["sessionToken"]))
@@ -263,7 +246,7 @@ func (b *Backend) recoverOne401Credential(ctx context.Context, settings AppSetti
 	if err := validateCPAAuthJSON(cpa); err != nil {
 		return Recovery401ItemResult{Name: name, Email: email, Action: "convert_failed", OK: false, Message: err.Error()}
 	}
-	return b.uploadAndVerifyRecoveredAuthFile(ctx, settings, name, email, cpa, "re-login succeeded and verified by Codex usage probe")
+	return b.uploadAndVerifyRecoveredAuthFile(ctx, settings, name, email, cpa, "OAuth re-login succeeded and verified by Codex usage probe")
 }
 
 func (b *Backend) uploadAndVerifyRecoveredAuthFile(ctx context.Context, settings AppSettings, name string, email string, cpa map[string]any, successMessage string) Recovery401ItemResult {
@@ -325,6 +308,92 @@ func (b *Backend) verifyRecoveredAuthFile(ctx context.Context, settings AppSetti
 		return probe, probe.UsageError
 	}
 	return probe, nil
+}
+
+type recoveryClassifiedError struct {
+	Action  string
+	Message string
+	Cause   error
+}
+
+func (e recoveryClassifiedError) Error() string {
+	if strings.TrimSpace(e.Message) != "" {
+		return e.Message
+	}
+	if e.Cause != nil {
+		return e.Cause.Error()
+	}
+	return "OAuth recovery failed"
+}
+
+func (e recoveryClassifiedError) Unwrap() error {
+	return e.Cause
+}
+
+func classifiedRecoveryError(action string, message string, cause error) error {
+	return recoveryClassifiedError{
+		Action:  strings.TrimSpace(action),
+		Message: strings.TrimSpace(message),
+		Cause:   cause,
+	}
+}
+
+func recoveryOAuthFailureResult(name string, email string, err error) Recovery401ItemResult {
+	action := "oauth_failed"
+	message := "OAuth recovery failed"
+
+	var classified recoveryClassifiedError
+	if errors.As(err, &classified) {
+		if classified.Action != "" {
+			action = classified.Action
+		}
+		if classified.Message != "" {
+			message = classified.Message
+		}
+	} else {
+		action = classifyOAuthRecoveryFailureAction(err)
+		if err != nil {
+			message = "OAuth recovery failed: " + err.Error()
+		}
+	}
+
+	return Recovery401ItemResult{Name: name, Email: email, Action: action, OK: false, Message: message}
+}
+
+func classifyOAuthRecoveryFailureAction(err error) string {
+	if err == nil {
+		return "oauth_failed"
+	}
+	lower := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(lower, "access deactivated") ||
+		strings.Contains(lower, "access_deactivated") ||
+		strings.Contains(lower, "account deactivated") ||
+		strings.Contains(lower, "account disabled") ||
+		strings.Contains(lower, "account suspended"):
+		return "oauth_access_deactivated"
+	case strings.Contains(lower, "phone"):
+		return "oauth_phone_required"
+	case strings.Contains(lower, "cloudflare") || strings.Contains(lower, "challenge blocked"):
+		return "oauth_cloudflare_blocked"
+	case strings.Contains(lower, "verification code not found") ||
+		strings.Contains(lower, "verification code is empty"):
+		return "otp_not_found"
+	case strings.Contains(lower, "invalid") && (strings.Contains(lower, "otp") || strings.Contains(lower, "code")):
+		return "otp_invalid"
+	case strings.Contains(lower, "continue url") || strings.Contains(lower, "continue_url"):
+		return "oauth_continue_missing"
+	case strings.Contains(lower, "callback"):
+		return "oauth_callback_failed"
+	case strings.Contains(lower, "access token"):
+		return "oauth_no_access_token"
+	case strings.Contains(lower, "legacy openai auth flow"):
+		return "oauth_unsupported_flow"
+	case strings.Contains(lower, "sentinel"):
+		return "oauth_sentinel_failed"
+	default:
+		return "oauth_failed"
+	}
 }
 
 func (b *Backend) buildRecovery401ProbeScanResult(ctx context.Context, settings AppSettings, files []map[string]any) (Recovery401ScanResult, []map[string]any, error) {
@@ -1478,7 +1547,7 @@ func loginChatGPTWithEmailOTP(ctx context.Context, email string, userAgent strin
 		return nil, err
 	}
 	if !state.isModern {
-		return nil, errors.New("legacy OpenAI auth flow is not supported by the recovery worker")
+		return nil, classifiedRecoveryError("oauth_unsupported_flow", "OAuth recovery failed: legacy OpenAI auth flow is not supported by the recovery worker", nil)
 	}
 	if onStatus != nil {
 		onStatus("sentinel", "generating OpenAI sentinel token")
@@ -1508,19 +1577,44 @@ func loginChatGPTWithEmailOTP(ctx context.Context, email string, userAgent strin
 		}
 	}
 	if onStatus != nil {
-		onStatus("session", "getting chatgpt session")
+		onStatus("oauth_session", "checking OAuth-issued ChatGPT token")
 	}
 	session, err := getChatGPTSession(ctx, client, userAgent)
 	if err != nil {
 		return nil, err
 	}
-	if strings.TrimSpace(stringValue(session["accessToken"])) == "" && strings.TrimSpace(stringValue(session["access_token"])) == "" {
-		return nil, errors.New("chatgpt session has no access token")
+	if !chatGPTSessionHasAccessToken(session) && callbackURL == "" {
+		if onStatus != nil {
+			onStatus("callback", "resolving callback after OTP validation")
+		}
+		resolvedCallbackURL, resolveErr := resolveOpenAICallbackAfterOTP(ctx, client, &state, userAgent)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		if resolvedCallbackURL != "" {
+			if onStatus != nil {
+				onStatus("callback", "following resolved callback")
+			}
+			if err := followOpenAICallback(ctx, client, resolvedCallbackURL, userAgent); err != nil {
+				return nil, classifiedRecoveryError("oauth_callback_failed", "OAuth callback failed after OTP validation: "+err.Error(), err)
+			}
+			session, err = getChatGPTSession(ctx, client, userAgent)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if !chatGPTSessionHasAccessToken(session) {
+		return nil, classifiedRecoveryError("oauth_no_access_token", "OAuth did not issue a ChatGPT access token after OTP validation", nil)
 	}
 	if onStatus != nil {
 		onStatus("success", "login succeeded")
 	}
 	return session, nil
+}
+
+func chatGPTSessionHasAccessToken(session map[string]any) bool {
+	return strings.TrimSpace(stringValue(session["accessToken"])) != "" || strings.TrimSpace(stringValue(session["access_token"])) != ""
 }
 
 type openAILoginState struct {
@@ -1675,7 +1769,7 @@ func completeModernOpenAILogin(ctx context.Context, client *http.Client, state *
 		return "", err
 	}
 	if code == "" {
-		return "", errors.New("verification code is empty")
+		return "", classifiedRecoveryError("otp_not_found", "OAuth recovery failed: verification code is empty", nil)
 	}
 	if onStatus != nil {
 		onStatus("verify_code", "submitting verification code")
@@ -1688,28 +1782,46 @@ func completeModernOpenAILogin(ctx context.Context, client *http.Client, state *
 	payload := map[string]any{"code": code}
 	var parsed map[string]any
 	if err := doOpenAIJSONWithHeaders(ctx, client, http.MethodPost, authOpenAIOrigin+"/api/accounts/email-otp/validate", mustJSONReader(payload), userAgent, authOpenAIOrigin+"/email-verification", &parsed, openAISentinelHeaders(state), "application/json"); err != nil {
-		return "", err
+		return "", classifyOpenAIOTPValidationError(err)
 	}
 	if openAIResponseIndicatesAccessDeactivated(parsed) {
-		return "", errors.New("OpenAI returned Access Deactivated after OTP validation; this account cannot be recovered by server-side re-login")
+		return "", classifiedRecoveryError("oauth_access_deactivated", "OpenAI returned Access Deactivated after OTP validation; this account cannot be recovered by OAuth recovery", nil)
 	}
 	continueURL = normalizeURL(extractContinueURL(parsed), authOpenAIOrigin)
 	if openAIURLIndicatesAccessDeactivated(continueURL) {
-		return "", errors.New("OpenAI redirected to Access Deactivated after OTP validation; this account cannot be recovered by server-side re-login")
+		return "", classifiedRecoveryError("oauth_access_deactivated", "OpenAI redirected to Access Deactivated after OTP validation; this account cannot be recovered by OAuth recovery", nil)
 	}
 	if continueURL == "" {
 		if openAIPageRequiresPhone(parsed) {
-			return "", errors.New("OpenAI requested phone verification after OTP validation; finish the phone challenge in a browser before server-side recovery")
+			return "", classifiedRecoveryError("oauth_phone_required", "OpenAI requested phone verification after OTP validation; finish the phone challenge in a browser before OAuth recovery", nil)
 		}
 		if openAIResponseLooksComplete(parsed) {
 			if onStatus != nil {
-				onStatus("session", "OTP validation returned no redirect; checking session directly")
+				onStatus("oauth", "OTP validation returned no redirect; checking OAuth callback state")
 			}
 			return "", nil
 		}
-		return "", fmt.Errorf("OpenAI did not return a continue URL after OTP validation (%s)", openAIPageSummary(parsed))
+		return "", classifiedRecoveryError("oauth_continue_missing", fmt.Sprintf("OpenAI did not return an OAuth continue URL after OTP validation (%s)", openAIPageSummary(parsed)), nil)
 	}
 	return continueURL, nil
+}
+
+func classifyOpenAIOTPValidationError(err error) error {
+	if err == nil {
+		return nil
+	}
+	action := classifyOAuthRecoveryFailureAction(err)
+	message := "OAuth OTP validation failed: " + err.Error()
+	if action == "oauth_failed" {
+		lower := strings.ToLower(err.Error())
+		switch {
+		case strings.Contains(lower, "400") || strings.Contains(lower, "401"):
+			action = "otp_invalid"
+		case strings.Contains(lower, "429") || strings.Contains(lower, "rate limit"):
+			action = "oauth_rate_limited"
+		}
+	}
+	return classifiedRecoveryError(action, message, err)
 }
 
 func kickoffModernOTP(ctx context.Context, client *http.Client, state *openAILoginState, userAgent string) error {
@@ -1777,6 +1889,128 @@ func followOpenAICallback(ctx context.Context, client *http.Client, callbackURL 
 		return nil
 	}
 	return nil
+}
+
+func resolveOpenAICallbackAfterOTP(ctx context.Context, client *http.Client, state *openAILoginState, userAgent string) (string, error) {
+	if state == nil {
+		return "", nil
+	}
+	seen := make(map[string]struct{})
+	for _, candidate := range []string{state.authURL, state.loginURL} {
+		start := strings.TrimSpace(candidate)
+		if start == "" {
+			continue
+		}
+		if _, ok := seen[start]; ok {
+			continue
+		}
+		seen[start] = struct{}{}
+		callbackURL, err := resolveOpenAICallbackFromURL(ctx, client, start, userAgent)
+		if err != nil || callbackURL != "" {
+			return callbackURL, err
+		}
+	}
+	return "", nil
+}
+
+func resolveOpenAICallbackFromURL(ctx context.Context, client *http.Client, startURL string, userAgent string) (string, error) {
+	current := startURL
+	for i := 0; i < 12; i++ {
+		if openAIURLIndicatesAccessDeactivated(current) {
+			return "", classifiedRecoveryError("oauth_access_deactivated", "OpenAI redirected to Access Deactivated after OTP validation; this account cannot be recovered by OAuth recovery", nil)
+		}
+		if isChatGPTCallbackURL(current) || isChatGPTLandingURL(current) {
+			return current, nil
+		}
+		req, err := newOpenAIRequest(ctx, http.MethodGet, current, nil, userAgent, authOpenAIOrigin+"/email-verification")
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			return "", err
+		}
+		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+		resp.Body.Close()
+		if readErr != nil {
+			return "", readErr
+		}
+		if isCloudflareChallenge(resp, data) {
+			err := cloudflareChallengeError(current, resp.StatusCode)
+			return "", classifiedRecoveryError("oauth_cloudflare_blocked", "OAuth callback blocked by Cloudflare challenge: "+err.Error(), err)
+		}
+		if resp.StatusCode >= 300 && resp.StatusCode < 400 {
+			location := strings.TrimSpace(resp.Header.Get("Location"))
+			if location == "" {
+				return "", nil
+			}
+			current = normalizeURL(location, current)
+			continue
+		}
+		if openAITextIndicatesAccessDeactivated(string(data)) {
+			return "", classifiedRecoveryError("oauth_access_deactivated", "OpenAI returned Access Deactivated after OTP validation; this account cannot be recovered by OAuth recovery", nil)
+		}
+		if callbackURL := extractContinueURLFromResponseBody(data, current); callbackURL != "" {
+			current = callbackURL
+			continue
+		}
+		return "", nil
+	}
+	return "", nil
+}
+
+func extractContinueURLFromResponseBody(data []byte, base string) string {
+	if len(data) == 0 {
+		return ""
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal(data, &parsed); err == nil {
+		if callbackURL := normalizeURL(extractContinueURL(parsed), base); callbackURL != "" {
+			return callbackURL
+		}
+	}
+	body := string(data)
+	for _, marker := range []string{
+		`https://chatgpt.com/api/auth/callback`,
+		`https://chat.openai.com/api/auth/callback`,
+		`/api/auth/callback`,
+	} {
+		index := strings.Index(body, marker)
+		if index < 0 {
+			continue
+		}
+		end := index
+		for end < len(body) {
+			switch body[end] {
+			case '"', '\'', '<', '>', ' ', '\n', '\r', '\t', '\\':
+				return normalizeURL(html.UnescapeString(body[index:end]), base)
+			default:
+				end++
+			}
+		}
+		return normalizeURL(html.UnescapeString(body[index:end]), base)
+	}
+	return ""
+}
+
+func isChatGPTCallbackURL(rawURL string) bool {
+	lower := strings.ToLower(strings.TrimSpace(rawURL))
+	return strings.Contains(lower, "chatgpt.com/api/auth/callback") ||
+		strings.Contains(lower, "chat.openai.com/api/auth/callback")
+}
+
+func isChatGPTLandingURL(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	host := strings.ToLower(parsed.Host)
+	if host != "chatgpt.com" && host != "chat.openai.com" {
+		return false
+	}
+	path := strings.ToLower(parsed.Path)
+	return path == "" || path == "/" || !strings.HasPrefix(path, "/api/auth/")
 }
 
 func getChatGPTSession(ctx context.Context, client *http.Client, userAgent string) (map[string]any, error) {

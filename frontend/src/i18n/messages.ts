@@ -164,7 +164,7 @@ export const messages = {
     recovery: {
       eyebrow: 'Account Recovery',
       title: 'Repair 401 Codex auth files only when you click run.',
-      lead: 'The worker scans CPA 401 credentials, refreshes valid ChatGPT session tokens first, then falls back to PostInBox email OTP re-login and uploads the repaired CPA JSON.',
+      lead: 'The worker scans CPA 401 credentials, performs PostInBox email OTP OAuth recovery, classifies OAuth failures, and uploads only credentials that pass a live Codex usage probe.',
       actions: {
         scan: 'Scan 401',
         run: 'Run 401 Recovery',
@@ -717,7 +717,7 @@ export const messages = {
     recovery: {
       eyebrow: '账号恢复',
       title: '只在点击按钮后修复 401 Codex 凭证。',
-      lead: '任务会扫描 CPA 中的 401 凭证，优先刷新仍可用的 ChatGPT session token，失败后再通过 PostInBox 邮箱 OTP 重新登录，并上传修复后的 CPA JSON。',
+      lead: '任务会扫描 CPA 中的 401 凭证，通过 PostInBox 邮箱 OTP 走 OAuth 恢复，分类 OAuth 失败原因，并且只上传通过实时 Codex usage 探测的凭证。',
       actions: {
         scan: '扫描 401',
         run: '执行 401 恢复',
