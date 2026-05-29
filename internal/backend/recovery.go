@@ -1892,11 +1892,8 @@ func followOpenAICallback(ctx context.Context, client *http.Client, callbackURL 
 }
 
 func resolveOpenAICallbackAfterOTP(ctx context.Context, client *http.Client, state *openAILoginState, userAgent string) (string, error) {
-	if state == nil {
-		return "", nil
-	}
 	seen := make(map[string]struct{})
-	for _, candidate := range []string{state.authURL, state.loginURL} {
+	for _, candidate := range openAIPostOTPResolutionURLs(state) {
 		start := strings.TrimSpace(candidate)
 		if start == "" {
 			continue
@@ -1911,6 +1908,17 @@ func resolveOpenAICallbackAfterOTP(ctx context.Context, client *http.Client, sta
 		}
 	}
 	return "", nil
+}
+
+func openAIPostOTPResolutionURLs(state *openAILoginState) []string {
+	if state == nil {
+		return nil
+	}
+	return []string{
+		state.authURL,
+		state.loginURL,
+		authOpenAIOrigin + "/email-verification",
+	}
 }
 
 func resolveOpenAICallbackFromURL(ctx context.Context, client *http.Client, startURL string, userAgent string) (string, error) {
@@ -2391,6 +2399,12 @@ func openAITextIndicatesAccessDeactivated(text string) bool {
 		"account disabled",
 		"account_suspended",
 		"account suspended",
+		"账户已被删除或停用",
+		"账户已被删除",
+		"账户已被停用",
+		"账号已被删除或停用",
+		"账号已被删除",
+		"账号已被停用",
 	} {
 		if strings.Contains(lower, marker) {
 			return true

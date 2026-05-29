@@ -157,3 +157,29 @@ func TestRecovery401CandidateDetectionPrefersLiveProbe(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenAIPostOTPResolutionURLsIncludesEmailVerification(t *testing.T) {
+	t.Parallel()
+
+	state := &openAILoginState{
+		authURL:  "https://auth.openai.com/authorize",
+		loginURL: "https://auth.openai.com/log-in",
+	}
+
+	urls := openAIPostOTPResolutionURLs(state)
+	if len(urls) != 3 {
+		t.Fatalf("openAIPostOTPResolutionURLs() returned %d URLs, want 3", len(urls))
+	}
+	if urls[2] != authOpenAIOrigin+"/email-verification" {
+		t.Fatalf("email verification URL = %q, want %q", urls[2], authOpenAIOrigin+"/email-verification")
+	}
+}
+
+func TestOpenAITextIndicatesAccessDeactivatedChinesePage(t *testing.T) {
+	t.Parallel()
+
+	text := "身份验证错误 你没有账户，因为该账户已被删除或停用。错误代码：account_deactivated"
+	if !openAITextIndicatesAccessDeactivated(text) {
+		t.Fatalf("expected Chinese account_deactivated page to be recognized")
+	}
+}
