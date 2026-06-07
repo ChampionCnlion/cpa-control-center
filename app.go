@@ -189,6 +189,22 @@ func (a *App) Run401Recovery(options backend.Recovery401Options) (backend.Recove
 	return service.Run401Recovery(options)
 }
 
+func (a *App) ScanSub2APIConversion() (backend.Sub2APIConvertScanResult, error) {
+	service, err := a.ensureBackend()
+	if err != nil {
+		return backend.Sub2APIConvertScanResult{}, err
+	}
+	return service.ScanSub2APIConversion()
+}
+
+func (a *App) RunSub2APIConversion(options backend.Sub2APIConvertOptions) (backend.Sub2APIConvertResult, error) {
+	service, err := a.ensureBackend()
+	if err != nil {
+		return backend.Sub2APIConvertResult{}, err
+	}
+	return service.RunSub2APIConversion(options)
+}
+
 func (a *App) ProbeAccount(name string) (backend.AccountRecord, error) {
 	service, err := a.ensureBackend()
 	if err != nil {

@@ -262,7 +262,16 @@ select {
   grid-template-columns: minmax(320px, 0.8fr) minmax(0, 1.2fr);
 }
 
+.dashboard-grid--sub2api {
+  grid-template-columns: minmax(320px, 0.72fr) minmax(0, 1.28fr);
+}
+
 .recovery-options {
+  display: grid;
+  gap: 16px;
+}
+
+.sub2api-options {
   display: grid;
   gap: 16px;
 }
@@ -280,6 +289,10 @@ select {
 }
 
 .recovery-results {
+  min-height: 360px;
+}
+
+.sub2api-results {
   min-height: 360px;
 }
 

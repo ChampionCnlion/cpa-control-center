@@ -155,6 +155,8 @@ func (s *Server) Handler() http.Handler {
 	protected.HandleFunc("POST /api/tasks/maintain", s.handleRunMaintain)
 	protected.HandleFunc("POST /api/recovery/401/scan", s.handleScan401Recovery)
 	protected.HandleFunc("POST /api/recovery/401/run", s.handleRun401Recovery)
+	protected.HandleFunc("POST /api/sub2api/scan", s.handleScanSub2APIConversion)
+	protected.HandleFunc("POST /api/sub2api/convert", s.handleRunSub2APIConversion)
 	protected.HandleFunc("GET /api/quotas", s.handleGetQuotas)
 	protected.HandleFunc("POST /api/accounts/{name}/probe", s.handleProbeAccount)
 	protected.HandleFunc("POST /api/accounts/bulk/probe", s.handleProbeAccounts)
@@ -384,6 +386,29 @@ func (s *Server) handleRun401Recovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	result, err := s.service.Run401Recovery(input)
+	if err != nil {
+		writeError(w, statusFromTaskError(err), err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleScanSub2APIConversion(w http.ResponseWriter, _ *http.Request) {
+	result, err := s.service.ScanSub2APIConversion()
+	if err != nil {
+		writeError(w, statusFromTaskError(err), err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleRunSub2APIConversion(w http.ResponseWriter, r *http.Request) {
+	var input backend.Sub2APIConvertOptions
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	result, err := s.service.RunSub2APIConversion(input)
 	if err != nil {
 		writeError(w, statusFromTaskError(err), err)
 		return

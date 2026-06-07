@@ -19,6 +19,9 @@ import type {
   ScanDetailPage,
   ScanSummary,
   SchedulerStatus,
+  Sub2APIConvertOptions,
+  Sub2APIConvertResult,
+  Sub2APIConvertScanResult,
   TaskFinished,
   TaskProgress,
 } from '@/types'
@@ -30,11 +33,13 @@ type EventPayloadMap = {
   'inventory:log': LogEntry
   'quota:log': LogEntry
   'recovery:log': LogEntry
+  'sub2api:log': LogEntry
   'scan:progress': TaskProgress
   'maintain:progress': TaskProgress
   'inventory:progress': TaskProgress
   'quota:progress': TaskProgress
   'recovery:progress': TaskProgress
+  'sub2api:progress': TaskProgress
   'quota:snapshot': CodexQuotaSnapshot
   'task:finished': TaskFinished
 }
@@ -332,6 +337,23 @@ export async function run401Recovery(options: Recovery401Options) {
     return await callWails<Recovery401Result>('Run401Recovery', options)
   }
   return await httpRequest<Recovery401Result>('/api/recovery/401/run', {
+    method: 'POST',
+    body: options,
+  })
+}
+
+export async function scanSub2APIConversion() {
+  if (hasWailsBridge()) {
+    return await callWails<Sub2APIConvertScanResult>('ScanSub2APIConversion')
+  }
+  return await httpRequest<Sub2APIConvertScanResult>('/api/sub2api/scan', { method: 'POST' })
+}
+
+export async function runSub2APIConversion(options: Sub2APIConvertOptions) {
+  if (hasWailsBridge()) {
+    return await callWails<Sub2APIConvertResult>('RunSub2APIConversion', options)
+  }
+  return await httpRequest<Sub2APIConvertResult>('/api/sub2api/convert', {
     method: 'POST',
     body: options,
   })

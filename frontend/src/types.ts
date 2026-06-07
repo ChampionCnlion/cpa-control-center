@@ -266,6 +266,57 @@ export interface Recovery401Result {
   results: Recovery401ItemResult[]
 }
 
+export interface Sub2APIConvertOptions {
+  maxAccounts: number
+  overwrite: boolean
+  skipVerify: boolean
+}
+
+export interface Sub2APIConvertCandidate {
+  sourceName: string
+  targetName: string
+  accountIndex: number
+  email: string
+  provider: string
+  planType: string
+  accountId: string
+  message: string
+}
+
+export interface Sub2APIConvertScanResult {
+  totalFiles: number
+  scannedFiles: number
+  convertibleFiles: number
+  convertibleAccounts: number
+  skippedAccounts: number
+  candidates: Sub2APIConvertCandidate[]
+}
+
+export interface Sub2APIConvertItemResult {
+  sourceName: string
+  targetName: string
+  email: string
+  action: string
+  ok: boolean
+  message: string
+}
+
+export interface Sub2APIConvertSummary {
+  totalFiles: number
+  candidates: number
+  processed: number
+  uploaded: number
+  skipped: number
+  failed: number
+  verified: number
+  quotaLimited: number
+}
+
+export interface Sub2APIConvertResult {
+  summary: Sub2APIConvertSummary
+  results: Sub2APIConvertItemResult[]
+}
+
 export interface ActionResult {
   name: string
   ok: boolean
@@ -336,8 +387,10 @@ export interface MaintainResult {
   reenableResults: ActionResult[]
 }
 
+export type TaskKind = 'scan' | 'maintain' | 'inventory' | 'quota' | 'recovery' | 'sub2api'
+
 export interface TaskProgress {
-  kind: 'scan' | 'maintain' | 'inventory' | 'quota' | 'recovery'
+  kind: TaskKind
   phase: string
   current: number
   total: number
@@ -346,14 +399,14 @@ export interface TaskProgress {
 }
 
 export interface TaskFinished {
-  kind: 'scan' | 'maintain' | 'inventory' | 'quota' | 'recovery'
+  kind: TaskKind
   status: string
   message: string
 }
 
 export interface LogEntry {
   id?: string
-  kind: 'scan' | 'maintain' | 'inventory' | 'quota' | 'recovery'
+  kind: TaskKind
   level: string
   message: string
   timestamp: string
@@ -366,4 +419,4 @@ export interface AccountUpdate {
   record: AccountRecord
 }
 
-export type ViewKey = 'dashboard' | 'accounts' | 'quotas' | 'recovery' | 'logs' | 'settings'
+export type ViewKey = 'dashboard' | 'accounts' | 'quotas' | 'recovery' | 'sub2api' | 'logs' | 'settings'

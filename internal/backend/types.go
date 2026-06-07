@@ -261,6 +261,57 @@ type Recovery401Result struct {
 	Results []Recovery401ItemResult `json:"results"`
 }
 
+type Sub2APIConvertOptions struct {
+	MaxAccounts int  `json:"maxAccounts"`
+	Overwrite   bool `json:"overwrite"`
+	SkipVerify  bool `json:"skipVerify"`
+}
+
+type Sub2APIConvertCandidate struct {
+	SourceName   string `json:"sourceName"`
+	TargetName   string `json:"targetName"`
+	AccountIndex int    `json:"accountIndex"`
+	Email        string `json:"email"`
+	Provider     string `json:"provider"`
+	PlanType     string `json:"planType"`
+	AccountID    string `json:"accountId"`
+	Message      string `json:"message"`
+}
+
+type Sub2APIConvertScanResult struct {
+	TotalFiles         int                       `json:"totalFiles"`
+	ScannedFiles       int                       `json:"scannedFiles"`
+	ConvertibleFiles   int                       `json:"convertibleFiles"`
+	ConvertibleAccounts int                      `json:"convertibleAccounts"`
+	SkippedAccounts    int                       `json:"skippedAccounts"`
+	Candidates         []Sub2APIConvertCandidate `json:"candidates"`
+}
+
+type Sub2APIConvertItemResult struct {
+	SourceName string `json:"sourceName"`
+	TargetName string `json:"targetName"`
+	Email      string `json:"email"`
+	Action     string `json:"action"`
+	OK         bool   `json:"ok"`
+	Message    string `json:"message"`
+}
+
+type Sub2APIConvertSummary struct {
+	TotalFiles   int `json:"totalFiles"`
+	Candidates   int `json:"candidates"`
+	Processed    int `json:"processed"`
+	Uploaded     int `json:"uploaded"`
+	Skipped      int `json:"skipped"`
+	Failed       int `json:"failed"`
+	Verified     int `json:"verified"`
+	QuotaLimited int `json:"quotaLimited"`
+}
+
+type Sub2APIConvertResult struct {
+	Summary Sub2APIConvertSummary      `json:"summary"`
+	Results []Sub2APIConvertItemResult `json:"results"`
+}
+
 type ActionResult struct {
 	Name       string `json:"name"`
 	OK         bool   `json:"ok"`

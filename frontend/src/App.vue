@@ -20,6 +20,7 @@ import DashboardView from '@/views/DashboardView.vue'
 import AccountsView from '@/views/AccountsView.vue'
 import QuotasView from '@/views/QuotasView.vue'
 import RecoveryView from '@/views/RecoveryView.vue'
+import Sub2APIView from '@/views/Sub2APIView.vue'
 import LogsView from '@/views/LogsView.vue'
 import SettingsView from '@/views/SettingsView.vue'
 import { resolveShellMode, shellModeKey, type ShellMode } from '@/layout/shell'
@@ -55,6 +56,7 @@ const navItems = computed<Array<{ key: ViewKey; label: string; caption: string }
   { key: 'accounts', label: t('nav.accounts'), caption: t('nav.accountsCaption') },
   { key: 'quotas', label: t('nav.quotas'), caption: t('nav.quotasCaption') },
   { key: 'recovery', label: t('nav.recovery'), caption: t('nav.recoveryCaption') },
+  { key: 'sub2api', label: t('nav.sub2api'), caption: t('nav.sub2apiCaption') },
   { key: 'logs', label: t('nav.logs'), caption: t('nav.logsCaption') },
   { key: 'settings', label: t('nav.settings'), caption: t('nav.settingsCaption') },
 ])
@@ -67,6 +69,8 @@ const activeComponent = computed(() => {
       return QuotasView
     case 'recovery':
       return RecoveryView
+    case 'sub2api':
+      return Sub2APIView
     case 'logs':
       return LogsView
     case 'settings':
