@@ -105,13 +105,17 @@ func (c *Client) FetchAuthFiles(ctx context.Context, settings AppSettings) ([]ma
 }
 
 func (c *Client) BuildAccountRecord(item map[string]any, previous *AccountRecord, timestamp string) AccountRecord {
+	sub2Account := firstSub2APIOpenAIAccount(item)
+	provider := stringOr(nonUnknownString(stringValue(item["provider"])), nonUnknownString(stringValue(item["type"])), sub2Account.Platform)
+	accountType := stringOr(nonUnknownString(stringValue(item["type"])), nonUnknownString(stringValue(item["provider"])), sub2Account.Platform)
+	email := stringOr(stringValue(item["email"]), sub2Account.Name)
 	record := AccountRecord{
 		Name:             strings.TrimSpace(stringValue(item["name"])),
 		AuthIndex:        strings.TrimSpace(stringValue(item["auth_index"])),
-		Email:            strings.TrimSpace(stringValue(item["email"])),
-		Provider:         stringOr(stringValue(item["provider"]), stringValue(item["type"])),
-		Type:             stringOr(stringValue(item["type"]), stringValue(item["provider"])),
-		Account:          stringOr(stringValue(item["account"]), stringValue(item["email"])),
+		Email:            strings.TrimSpace(email),
+		Provider:         provider,
+		Type:             accountType,
+		Account:          stringOr(stringValue(item["account"]), email),
 		Source:           strings.TrimSpace(stringValue(item["source"])),
 		Status:           strings.TrimSpace(stringValue(item["status"])),
 		StatusMessage:    normalizeText(stringValue(item["status_message"]), 1200),
@@ -768,8 +772,15 @@ func parseUsageLimitResetSeconds(value any) (int, bool) {
 }
 
 func extractChatGPTAccountID(item map[string]any) string {
-	idToken := idTokenObject(item)
-	for _, source := range []map[string]any{idToken, item} {
+	sources := []map[string]any{idTokenObject(item), item}
+	for _, account := range sub2APIOpenAIAccounts(item) {
+		sources = append(sources, account.Credentials)
+		sources = append(sources, objectFromAny(account.Credentials["id_token"]))
+		sources = append(sources, objectFromAny(account.Credentials["idToken"]))
+		sources = append(sources, objectFromAny(account.Credentials["access_token"]))
+		sources = append(sources, objectFromAny(account.Credentials["accessToken"]))
+	}
+	for _, source := range sources {
 		if value := chatGPTAccountIDFromClaims(source); value != "" {
 			return value
 		}
@@ -778,8 +789,15 @@ func extractChatGPTAccountID(item map[string]any) string {
 }
 
 func extractIDTokenPlanType(item map[string]any) string {
-	idToken := idTokenObject(item)
-	for _, source := range []map[string]any{idToken, item} {
+	sources := []map[string]any{idTokenObject(item), item}
+	for _, account := range sub2APIOpenAIAccounts(item) {
+		sources = append(sources, account.Credentials)
+		sources = append(sources, objectFromAny(account.Credentials["id_token"]))
+		sources = append(sources, objectFromAny(account.Credentials["idToken"]))
+		sources = append(sources, objectFromAny(account.Credentials["access_token"]))
+		sources = append(sources, objectFromAny(account.Credentials["accessToken"]))
+	}
+	for _, source := range sources {
 		if value := chatGPTPlanTypeFromClaims(source); value != "" {
 			return value
 		}
@@ -789,6 +807,61 @@ func extractIDTokenPlanType(item map[string]any) string {
 
 func idTokenObject(item map[string]any) map[string]any {
 	return objectFromAny(item["id_token"])
+}
+
+type sub2APIAccountInfo struct {
+	Name        string
+	Platform    string
+	Type        string
+	Credentials map[string]any
+}
+
+func firstSub2APIOpenAIAccount(item map[string]any) sub2APIAccountInfo {
+	accounts := sub2APIOpenAIAccounts(item)
+	if len(accounts) == 0 {
+		return sub2APIAccountInfo{}
+	}
+	return accounts[0]
+}
+
+func sub2APIOpenAIAccounts(item map[string]any) []sub2APIAccountInfo {
+	rawAccounts, ok := item["accounts"].([]any)
+	if !ok {
+		return nil
+	}
+	accounts := make([]sub2APIAccountInfo, 0, len(rawAccounts))
+	for _, rawAccount := range rawAccounts {
+		account, ok := rawAccount.(map[string]any)
+		if !ok {
+			continue
+		}
+		platform := strings.ToLower(strings.TrimSpace(stringValue(account["platform"])))
+		accountType := strings.ToLower(strings.TrimSpace(stringValue(account["type"])))
+		credentials := objectFromAny(account["credentials"])
+		if platform != "openai" && !sub2APICredentialsLookLikeOpenAI(credentials) {
+			continue
+		}
+		accounts = append(accounts, sub2APIAccountInfo{
+			Name:        strings.TrimSpace(stringValue(account["name"])),
+			Platform:    stringOr(platform, "openai"),
+			Type:        accountType,
+			Credentials: credentials,
+		})
+	}
+	return accounts
+}
+
+func sub2APICredentialsLookLikeOpenAI(credentials map[string]any) bool {
+	if len(credentials) == 0 {
+		return false
+	}
+	if strings.TrimSpace(stringValue(credentials["chatgpt_account_id"])) != "" ||
+		strings.TrimSpace(stringValue(credentials["account_id"])) != "" ||
+		strings.TrimSpace(stringValue(credentials["access_token"])) != "" ||
+		strings.TrimSpace(stringValue(credentials["accessToken"])) != "" {
+		return true
+	}
+	return false
 }
 
 func objectFromAny(value any) map[string]any {
@@ -825,6 +898,14 @@ func chatGPTAccountIDFromClaims(source map[string]any) string {
 		}
 	}
 	return ""
+}
+
+func nonUnknownString(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if strings.EqualFold(trimmed, "unknown") {
+		return ""
+	}
+	return trimmed
 }
 
 func chatGPTPlanTypeFromClaims(source map[string]any) string {

@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -80,6 +81,49 @@ func TestClientFetchProbeAndActions(t *testing.T) {
 	if !deleted.OK {
 		t.Fatalf("DeleteAccount failed: %+v", deleted)
 	}
+}
+
+func TestBuildAccountRecordExtractsSub2APIOpenAIAccountID(t *testing.T) {
+	t.Parallel()
+
+	client := NewClient()
+	record := client.BuildAccountRecord(map[string]any{
+		"name":       "sub2api.json",
+		"auth_index": "sub2api-auth",
+		"type":       "unknown",
+		"provider":   "unknown",
+		"accounts": []any{
+			map[string]any{
+				"name":     "user@example.com",
+				"platform": "openai",
+				"type":     "oauth",
+				"credentials": map[string]any{
+					"chatgpt_account_id": "acct-sub2api",
+					"plan_type":          "plus",
+					"access_token":       jwtWithClaims(map[string]any{"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": "acct-sub2api"}}),
+				},
+			},
+		},
+	}, nil, nowISO())
+
+	if record.ChatGPTAccountID != "acct-sub2api" {
+		t.Fatalf("ChatGPTAccountID = %q, want acct-sub2api", record.ChatGPTAccountID)
+	}
+	if record.PlanType != "plus" {
+		t.Fatalf("PlanType = %q, want plus", record.PlanType)
+	}
+	if record.Email != "user@example.com" {
+		t.Fatalf("Email = %q, want user@example.com", record.Email)
+	}
+	if record.Provider != "openai" || record.Type != "openai" {
+		t.Fatalf("expected openai provider/type, got provider=%q type=%q", record.Provider, record.Type)
+	}
+}
+
+func jwtWithClaims(claims map[string]any) string {
+	header, _ := json.Marshal(map[string]any{"alg": "none", "typ": "JWT"})
+	payload, _ := json.Marshal(claims)
+	return base64.RawURLEncoding.EncodeToString(header) + "." + base64.RawURLEncoding.EncodeToString(payload) + "."
 }
 
 func TestClientNormalizesManagedAccountNameForActions(t *testing.T) {
