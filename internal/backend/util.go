@@ -85,9 +85,7 @@ func normalizeSettings(input AppSettings, exportDir string) AppSettings {
 		settings.Locale = normalized
 	}
 	settings.DetailedLogs = input.DetailedLogs
-	if trimmed := strings.TrimSpace(input.TargetType); trimmed != "" {
-		settings.TargetType = strings.ToLower(trimmed)
-	}
+	settings.TargetType = strings.ToLower(strings.TrimSpace(input.TargetType))
 	if trimmed := strings.TrimSpace(input.Provider); trimmed != "" {
 		settings.Provider = strings.ToLower(trimmed)
 	}

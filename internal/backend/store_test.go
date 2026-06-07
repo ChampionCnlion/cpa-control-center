@@ -278,6 +278,45 @@ func TestLoadSettingsDefaultsSkipKnown401WhenMissingFromLegacyFile(t *testing.T)
 	}
 }
 
+func TestSaveSettingsAllowsEmptyTargetType(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	defer store.Close()
+
+	settings, err := store.SaveSettings(AppSettings{
+		BaseURL:         "https://example.com",
+		ManagementToken: "token",
+		Locale:          "en-US",
+		TargetType:      "",
+		ScanStrategy:    "full",
+		ScanBatchSize:   1000,
+		SkipKnown401:    true,
+		ProbeWorkers:    40,
+		ActionWorkers:   20,
+		TimeoutSeconds:  15,
+		UserAgent:       "ua",
+		QuotaAction:     "disable",
+	})
+	if err != nil {
+		t.Fatalf("SaveSettings: %v", err)
+	}
+	if settings.TargetType != "" {
+		t.Fatalf("expected empty target type, got %q", settings.TargetType)
+	}
+
+	loaded, err := store.LoadSettings()
+	if err != nil {
+		t.Fatalf("LoadSettings: %v", err)
+	}
+	if loaded.TargetType != "" {
+		t.Fatalf("expected loaded empty target type, got %q", loaded.TargetType)
+	}
+}
+
 func TestStoreCodexQuotaSnapshotRoundTrip(t *testing.T) {
 	t.Parallel()
 

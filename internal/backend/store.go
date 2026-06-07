@@ -187,6 +187,9 @@ func (s *Store) LoadSettings() (AppSettings, error) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return defaults, err
 	}
+	if _, ok := keys["targetType"]; !ok {
+		raw.TargetType = defaults.TargetType
+	}
 	if _, ok := keys["skipKnown401"]; !ok {
 		raw.SkipKnown401 = defaults.SkipKnown401
 	}
