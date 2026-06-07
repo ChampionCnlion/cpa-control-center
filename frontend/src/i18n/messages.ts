@@ -241,7 +241,7 @@ export const messages = {
     sub2api: {
       eyebrow: 'Sub2API Import',
       title: 'Convert Sub2API OpenAI auth files into CPA Codex auth files.',
-      lead: 'The scan downloads full auth JSON records, finds OpenAI OAuth accounts with ChatGPT Account ID, and only uploads converted CPA files after you click convert.',
+      lead: 'The scan downloads full auth JSON records, finds OpenAI OAuth accounts with ChatGPT Account ID, and overwrites single-account source files only after you click convert.',
       actions: {
         scan: 'Scan Sub2API',
         convert: 'Convert to CPA',
@@ -254,18 +254,18 @@ export const messages = {
         convertibleFiles: 'Convertible Files',
         convertibleFilesHint: 'Files containing OpenAI accounts',
         convertibleAccounts: 'Convertible Accounts',
-        convertibleAccountsHint: 'Ready for CPA Codex upload',
+        convertibleAccountsHint: 'Ready for in-place CPA upload',
         skippedAccounts: 'Skipped Accounts',
         skippedAccountsHint: 'Missing token or account ID',
       },
       options: {
         kicker: 'Conversion Options',
-        title: 'Click-controlled upload',
+        title: 'Click-controlled source overwrite',
         maxAccounts: 'Max accounts per run',
         allAccounts: 'all',
-        overwrite: 'Overwrite existing target files',
+        overwrite: 'Overwrite source files',
         skipVerify: 'Skip post-upload Codex probe',
-        hint: 'Set max accounts to 0 to process every convertible account. Verification uses the live Codex usage probe unless skipped.',
+        hint: 'Set max accounts to 0 to process every convertible account. Single-account Sub2API files are replaced in place; verification uses the live Codex usage probe unless skipped.',
       },
       candidates: {
         kicker: 'Scan Preview',
@@ -279,7 +279,7 @@ export const messages = {
       },
       columns: {
         sourceName: 'Source file',
-        targetName: 'Target file',
+        targetName: 'Output file',
         email: 'Email',
         plan: 'Plan',
         accountId: 'ChatGPT Account ID',
@@ -288,7 +288,7 @@ export const messages = {
       },
       dialog: {
         title: 'Convert Sub2API auth files?',
-        message: 'The worker will scan again and process up to {count} convertible OpenAI accounts.',
+        message: 'The worker will scan again and process up to {count} convertible OpenAI accounts, overwriting source files when there is one account per file.',
         confirm: 'Convert',
         cancel: 'Cancel',
       },
@@ -860,7 +860,7 @@ export const messages = {
     sub2api: {
       eyebrow: 'Sub2API 导入',
       title: '将 Sub2API OpenAI auth 文件转换成 CPA Codex auth 文件。',
-      lead: '扫描会下载完整 auth JSON，找出带 ChatGPT Account ID 的 OpenAI OAuth 账号；只有点击转换后才会上传新的 CPA 文件。',
+      lead: '扫描会下载完整 auth JSON，找出带 ChatGPT Account ID 的 OpenAI OAuth 账号；只有点击转换后，才会把单账号来源文件原地覆盖成 CPA 文件。',
       actions: {
         scan: '扫描 Sub2API',
         convert: '转换成 CPA',
@@ -873,18 +873,18 @@ export const messages = {
         convertibleFiles: '可转换文件',
         convertibleFilesHint: '包含 OpenAI 账号的文件',
         convertibleAccounts: '可转换账号',
-        convertibleAccountsHint: '可上传为 CPA Codex',
+        convertibleAccountsHint: '可原地上传为 CPA',
         skippedAccounts: '跳过账号',
         skippedAccountsHint: '缺少 token 或账号 ID',
       },
       options: {
         kicker: '转换选项',
-        title: '点击触发上传',
+        title: '点击触发原文件覆盖',
         maxAccounts: '单次最多处理',
         allAccounts: '全部',
-        overwrite: '覆盖已存在目标文件',
+        overwrite: '覆盖来源文件',
         skipVerify: '跳过上传后的 Codex 探测',
-        hint: '单次最多处理填 0 表示处理所有可转换账号。默认会在上传后用实时 Codex usage 探测验证。',
+        hint: '单次最多处理填 0 表示处理所有可转换账号。单账号 Sub2API 文件会被原地替换；默认会在上传后用实时 Codex usage 探测验证。',
       },
       candidates: {
         kicker: '扫描预览',
@@ -898,7 +898,7 @@ export const messages = {
       },
       columns: {
         sourceName: '来源文件',
-        targetName: '目标文件',
+        targetName: '输出文件',
         email: '邮箱',
         plan: '套餐',
         accountId: 'ChatGPT Account ID',
@@ -907,7 +907,7 @@ export const messages = {
       },
       dialog: {
         title: '转换 Sub2API auth 文件？',
-        message: '任务会重新扫描，并最多处理 {count} 个可转换 OpenAI 账号。',
+        message: '任务会重新扫描，并最多处理 {count} 个可转换 OpenAI 账号；单账号文件会覆盖来源文件。',
         confirm: '开始转换',
         cancel: '取消',
       },

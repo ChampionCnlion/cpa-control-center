@@ -23,7 +23,7 @@ const tasksStore = useTasksStore()
 
 const loadingScan = ref(false)
 const maxAccounts = ref(0)
-const overwrite = ref(false)
+const overwrite = ref(true)
 const skipVerify = ref(false)
 const scanResult = ref<Sub2APIConvertScanResult | null>(null)
 const convertResult = ref<Sub2APIConvertResult | null>(null)

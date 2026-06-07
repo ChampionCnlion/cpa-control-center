@@ -263,6 +263,10 @@ func sub2APIConvertCandidatesFromAuth(sourceName string, authJSON map[string]any
 		}
 		candidates = append(candidates, candidate)
 	}
+	if len(candidates) == 1 {
+		candidates[0].TargetName = sourceName
+		candidates[0].Message = "convertible; source file will be overwritten"
+	}
 	return candidates, skipped
 }
 
